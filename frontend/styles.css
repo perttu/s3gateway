@@ -1,0 +1,522 @@
+/* Reset and Base Styles */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, sans-serif;
+    line-height: 1.6;
+    color: #333;
+    background-color: #f5f7fa;
+}
+
+/* Container */
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
+/* Header */
+header {
+    text-align: center;
+    margin-bottom: 40px;
+    padding: 20px 0;
+}
+
+header h1 {
+    font-size: 2.5rem;
+    color: #2c3e50;
+    margin-bottom: 10px;
+}
+
+.subtitle {
+    color: #6c757d;
+    font-size: 1.1rem;
+}
+
+/* Tabs */
+.tabs {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 20px;
+    border-bottom: 2px solid #e9ecef;
+}
+
+.tab-button {
+    padding: 12px 24px;
+    border: none;
+    background: none;
+    font-size: 16px;
+    font-weight: 500;
+    color: #6c757d;
+    cursor: pointer;
+    border-bottom: 3px solid transparent;
+    transition: all 0.3s;
+}
+
+.tab-button:hover {
+    color: #495057;
+}
+
+.tab-button.active {
+    color: #4CAF50;
+    border-bottom-color: #4CAF50;
+}
+
+.tab-content {
+    display: none;
+}
+
+.tab-content.active {
+    display: block;
+}
+
+/* Cards */
+.card {
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    padding: 30px;
+    margin-bottom: 20px;
+}
+
+.card h2 {
+    color: #2c3e50;
+    margin-bottom: 20px;
+    font-size: 1.5rem;
+}
+
+/* Forms */
+.form-group {
+    margin-bottom: 20px;
+    position: relative;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 8px;
+    color: #555;
+    font-weight: 500;
+}
+
+.form-group input {
+    width: 100%;
+    padding: 12px 16px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 16px;
+    transition: border-color 0.3s;
+}
+
+.form-group input:focus {
+    outline: none;
+    border-color: #4CAF50;
+}
+
+.toggle-password {
+    position: absolute;
+    right: 10px;
+    top: 38px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 20px;
+    padding: 5px;
+}
+
+/* Buttons */
+.btn {
+    padding: 12px 24px;
+    border: none;
+    border-radius: 4px;
+    font-size: 16px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.3s;
+}
+
+.btn-primary {
+    background-color: #4CAF50;
+    color: white;
+}
+
+.btn-primary:hover {
+    background-color: #45a049;
+}
+
+.btn-secondary {
+    background-color: #6c757d;
+    color: white;
+}
+
+.btn-secondary:hover {
+    background-color: #5a6268;
+}
+
+/* Loading State */
+.loading {
+    text-align: center;
+    padding: 40px;
+}
+
+.spinner {
+    border: 4px solid #f3f3f3;
+    border-top: 4px solid #4CAF50;
+    border-radius: 50%;
+    width: 40px;
+    height: 40px;
+    animation: spin 1s linear infinite;
+    margin: 0 auto 20px;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* Alerts */
+.alert {
+    padding: 16px 20px;
+    border-radius: 4px;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+}
+
+.alert-error {
+    background-color: #fee;
+    color: #c33;
+    border: 1px solid #fcc;
+}
+
+.alert-icon {
+    font-size: 20px;
+    margin-right: 10px;
+}
+
+/* Buckets Grid */
+.buckets-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 20px;
+}
+
+.bucket-item {
+    background: #f8f9fa;
+    border: 1px solid #e9ecef;
+    border-radius: 8px;
+    padding: 20px;
+    cursor: pointer;
+    transition: all 0.3s;
+}
+
+.bucket-item:hover {
+    border-color: #4CAF50;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+
+.bucket-name {
+    font-weight: 600;
+    color: #2c3e50;
+    margin-bottom: 8px;
+    font-size: 1.1rem;
+}
+
+.bucket-date {
+    color: #6c757d;
+    font-size: 0.9rem;
+}
+
+.bucket-stats-mini {
+    margin-top: 10px;
+    display: flex;
+    gap: 15px;
+    font-size: 0.85rem;
+    color: #6c757d;
+}
+
+/* Bucket Details */
+.bucket-header {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    margin-bottom: 20px;
+}
+
+.bucket-stats {
+    display: flex;
+    gap: 40px;
+    margin-bottom: 30px;
+    padding: 20px;
+    background: #f8f9fa;
+    border-radius: 8px;
+}
+
+.stat {
+    text-align: center;
+}
+
+.stat-label {
+    display: block;
+    color: #6c757d;
+    font-size: 0.9rem;
+    margin-bottom: 5px;
+}
+
+.stat-value {
+    display: block;
+    font-size: 1.8rem;
+    font-weight: 600;
+    color: #2c3e50;
+}
+
+/* Files Table */
+.files-table-container {
+    overflow-x: auto;
+}
+
+.files-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.files-table th {
+    background-color: #f8f9fa;
+    padding: 12px;
+    text-align: left;
+    font-weight: 600;
+    color: #555;
+    border-bottom: 2px solid #e9ecef;
+}
+
+.files-table td {
+    padding: 12px;
+    border-bottom: 1px solid #e9ecef;
+}
+
+.files-table tr:hover {
+    background-color: #f8f9fa;
+}
+
+.file-name {
+    color: #2c3e50;
+    font-weight: 500;
+}
+
+.file-size {
+    color: #6c757d;
+}
+
+/* Metadata Viewer Styles */
+.metadata-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+.metadata-actions {
+    display: flex;
+    gap: 10px;
+}
+
+.metadata-list {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+}
+
+.metadata-item {
+    background: #f8f9fa;
+    border: 1px solid #e9ecef;
+    border-radius: 8px;
+    padding: 20px;
+    cursor: pointer;
+    transition: all 0.3s;
+}
+
+.metadata-item:hover {
+    border-color: #4CAF50;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.metadata-item-header {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 10px;
+}
+
+.metadata-endpoint {
+    font-weight: 600;
+    color: #2c3e50;
+}
+
+.metadata-timestamp {
+    color: #6c757d;
+    font-size: 0.9rem;
+}
+
+.metadata-item-stats {
+    display: flex;
+    gap: 20px;
+    font-size: 0.9rem;
+    color: #6c757d;
+}
+
+.empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    color: #6c757d;
+}
+
+.empty-state p {
+    margin-bottom: 10px;
+}
+
+/* Metadata Detail */
+.metadata-detail-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 30px;
+}
+
+.metadata-info {
+    background: #f8f9fa;
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 30px;
+}
+
+.info-row {
+    display: flex;
+    padding: 10px 0;
+    border-bottom: 1px solid #e9ecef;
+}
+
+.info-row:last-child {
+    border-bottom: none;
+}
+
+.info-label {
+    font-weight: 600;
+    color: #555;
+    width: 150px;
+}
+
+.json-viewer {
+    margin-top: 30px;
+}
+
+.json-viewer h3 {
+    margin-bottom: 15px;
+    color: #2c3e50;
+}
+
+.json-viewer pre {
+    background: #f8f9fa;
+    border: 1px solid #e9ecef;
+    border-radius: 8px;
+    padding: 20px;
+    overflow-x: auto;
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    font-size: 0.9rem;
+    line-height: 1.5;
+}
+
+/* Snapshot Summary */
+.snapshot-summary {
+    background: #f8f9fa;
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 30px;
+}
+
+.snapshot-summary h3 {
+    color: #2c3e50;
+    margin-bottom: 20px;
+}
+
+.summary-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 20px;
+    margin-bottom: 30px;
+}
+
+.json-preview {
+    margin-top: 20px;
+}
+
+.json-preview h4 {
+    color: #2c3e50;
+    margin-bottom: 10px;
+}
+
+.json-preview pre {
+    background: white;
+    border: 1px solid #e9ecef;
+    border-radius: 4px;
+    padding: 15px;
+    overflow-x: auto;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+/* Success Alert */
+.alert-success {
+    background-color: #d4edda;
+    color: #155724;
+    border: 1px solid #c3e6cb;
+}
+
+.snapshot-info {
+    margin-bottom: 20px;
+}
+
+/* Metadata Item Footer */
+.metadata-item-footer {
+    margin-top: 10px;
+    color: #6c757d;
+    font-size: 0.85rem;
+}
+
+/* Footer */
+footer {
+    text-align: center;
+    padding: 40px 0 20px;
+    color: #6c757d;
+    font-size: 0.9rem;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    header h1 {
+        font-size: 2rem;
+    }
+    
+    .buckets-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .bucket-stats {
+        flex-direction: column;
+        gap: 20px;
+    }
+    
+    .files-table {
+        font-size: 0.9rem;
+    }
+    
+    .metadata-detail-header {
+        flex-direction: column;
+        gap: 15px;
+    }
+    
+    .info-label {
+        width: 120px;
+    }
+} 

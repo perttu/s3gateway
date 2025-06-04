@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>S3 Service Discovery - Bulletproof Demo</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🛡️ Bulletproof S3 Service Discovery</h1>
+            <p class="subtitle">Secure data ingest demo - Your credentials never leave your browser</p>
+        </header>
+
+        <main>
+            <!-- Navigation Tabs -->
+            <div class="tabs">
+                <button class="tab-button active" onclick="showTab('discover')">🔍 Discover</button>
+                <button class="tab-button" onclick="showTab('metadata')">📊 Metadata Viewer</button>
+            </div>
+
+            <!-- Discovery Tab -->
+            <div id="discoverTab" class="tab-content active">
+                <!-- Credentials Form -->
+                <div class="card" id="credentialsCard">
+                    <h2>S3 Credentials</h2>
+                    <form id="credentialsForm">
+                        <div class="form-group">
+                            <label for="accessKey">Access Key</label>
+                            <input type="text" id="accessKey" name="accessKey" required 
+                                   placeholder="Enter your S3 access key">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="secretKey">Secret Key</label>
+                            <input type="password" id="secretKey" name="secretKey" required 
+                                   placeholder="Enter your S3 secret key">
+                            <button type="button" class="toggle-password" data-target="secretKey">👁️</button>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="region">Region</label>
+                            <input type="text" id="region" name="region" value="default" 
+                                   placeholder="AWS region or 'default'">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="endpoint">S3 API Endpoint</label>
+                            <input type="url" id="endpoint" name="endpoint" required 
+                                   value="https://s3c.tns.cx"
+                                   placeholder="https://s3c.tns.cx or custom endpoint">
+                        </div>
+                        
+                        <button type="submit" class="btn btn-primary">Discover Buckets</button>
+                    </form>
+                </div>
+
+                <!-- Loading State -->
+                <div class="loading" id="loadingIndicator" style="display: none;">
+                    <div class="spinner"></div>
+                    <p>Discovering S3 resources...</p>
+                </div>
+
+                <!-- Error Display -->
+                <div class="alert alert-error" id="errorAlert" style="display: none;">
+                    <span class="alert-icon">⚠️</span>
+                    <span id="errorMessage"></span>
+                </div>
+
+                <!-- Buckets List -->
+                <div class="card" id="bucketsCard" style="display: none;">
+                    <h2>Discovered Buckets</h2>
+                    <div id="bucketsList" class="buckets-grid"></div>
+                </div>
+
+                <!-- Bucket Details -->
+                <div class="card" id="bucketDetailsCard" style="display: none;">
+                    <div class="bucket-header">
+                        <button class="btn btn-secondary" id="backToBuckets">← Back to Buckets</button>
+                        <h2 id="bucketName"></h2>
+                    </div>
+                    <div class="bucket-stats">
+                        <div class="stat">
+                            <span class="stat-label">Total Files</span>
+                            <span class="stat-value" id="fileCount">0</span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-label">Total Size</span>
+                            <span class="stat-value" id="totalSize">0 B</span>
+                        </div>
+                    </div>
+                    <div class="files-table-container">
+                        <table class="files-table">
+                            <thead>
+                                <tr>
+                                    <th>File Name</th>
+                                    <th>Size</th>
+                                    <th>Last Modified</th>
+                                    <th>ETag</th>
+                                </tr>
+                            </thead>
+                            <tbody id="filesTableBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Metadata Tab -->
+            <div id="metadataTab" class="tab-content" style="display: none;">
+                <div class="card">
+                    <div class="metadata-header">
+                        <h2>📁 Stored Discoveries</h2>
+                        <div class="metadata-actions">
+                            <button class="btn btn-secondary" onclick="showTab('discover')">← Back to Discover</button>
+                            <button class="btn btn-secondary" onclick="refreshMetadata()">🔄 Refresh</button>
+                            <button class="btn btn-secondary" onclick="clearAllDiscoveries()">🗑️ Clear All</button>
+                        </div>
+                    </div>
+                    
+                    <div id="metadataList" class="metadata-list">
+                        <!-- Discoveries will be loaded here -->
+                    </div>
+                </div>
+
+                <!-- Metadata Detail View -->
+                <div class="card" id="metadataDetailCard" style="display: none;">
+                    <div class="metadata-detail-header">
+                        <div>
+                            <button class="btn btn-secondary" onclick="backToMetadataList()">← Back to List</button>
+                            <button class="btn btn-secondary" onclick="showTab('discover')">← Back to Discover</button>
+                        </div>
+                        <h2>Discovery Details</h2>
+                        <div>
+                            <button class="btn btn-primary" onclick="exportCurrentMetadata()">📥 Export JSON</button>
+                            <button class="btn btn-secondary" onclick="deleteCurrentSnapshot()">🗑️ Delete</button>
+                        </div>
+                    </div>
+                    
+                    <div class="metadata-info">
+                        <div class="info-row">
+                            <span class="info-label">Timestamp:</span>
+                            <span id="metadataTimestamp"></span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Endpoint:</span>
+                            <span id="metadataEndpoint"></span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Region:</span>
+                            <span id="metadataRegion"></span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Total Buckets:</span>
+                            <span id="metadataBucketCount"></span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Total Files:</span>
+                            <span id="metadataTotalFiles"></span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Total Size:</span>
+                            <span id="metadataTotalSize"></span>
+                        </div>
+                    </div>
+
+                    <div class="json-viewer">
+                        <h3>Raw JSON Data</h3>
+                        <pre id="metadataJson"></pre>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <footer>
+            <p>🔒 Your credentials are only used for service discovery and are not stored</p>
+        </footer>
+    </div>
+
+    <script src="app.js"></script>
+    <script src="metadata-viewer.js"></script>
+</body>
+</html> 

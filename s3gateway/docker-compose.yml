@@ -1,0 +1,73 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: s3gateway_postgres
+    environment:
+      POSTGRES_DB: s3gateway
+      POSTGRES_USER: s3gateway
+      POSTGRES_PASSWORD: s3gateway_pass
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./code/gateway/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+    networks:
+      - s3gateway_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U s3gateway"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  s3proxy:
+    build: ./docker/s3proxy
+    container_name: s3gateway_s3proxy
+    ports:
+      - "8080:8080"
+    volumes:
+      - s3proxy_data:/app/data
+    networks:
+      - s3gateway_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      - postgres
+
+  gateway:
+    build:
+      context: ./code/gateway
+      dockerfile: Dockerfile
+    container_name: s3gateway_service
+    environment:
+      DATABASE_URL: postgresql://s3gateway:s3gateway_pass@postgres:5432/s3gateway
+      S3PROXY_URL: http://s3proxy:8080
+      PROVIDERS_FILE: /app/providers_flat.csv
+      S3_BACKENDS_CONFIG: /app/config/s3_backends.json
+    volumes:
+      - ./providers_flat.csv:/app/providers_flat.csv
+      - ./config/s3_backends.json:/app/config/s3_backends.json
+    ports:
+      - "8000:8000"
+    networks:
+      - s3gateway_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  postgres_data:
+  s3proxy_data:
+
+networks:
+  s3gateway_network:
+    driver: bridge 

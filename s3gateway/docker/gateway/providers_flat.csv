@@ -1,0 +1,91 @@
+Country,Region/City,Zone_Code,Provider,Endpoint,S3_Compatible,Object_Lock,Versioning,ISO_27001_GDPR,Veeam_Ready,Notes
+Austria,(Vienna,AU-VIE-EXOS-1,Exoscale,,Yes,Unknown,Yes,Yes,Unknown,S3-compatible storage with replication across 3 nodes
+Bulgaria,Sofia,BU-SOFI-EXOS-3,Exoscale,,Yes,Unknown,Yes,Yes,Unknown,S3-compatible storage with replication across 3 nodes
+Germany,Frankfurt,GE-FRAN-EXOS-4,Exoscale,,Yes,Unknown,Yes,Yes,Unknown,S3-compatible storage with replication across 3 nodes
+Switzerland,(Geneva,SW-GEN-EXOS-5,Exoscale,,Yes,Unknown,Yes,Yes,Unknown,S3-compatible storage with replication across 3 nodes
+Austria,Ostermiething,AU-OSTE-STAC-1,STACKIT,,Yes,Yes,Yes,Yes,Unknown,Operated by Schwarz Group; data centers in Germany and Austria
+Germany,(Neckarsulm,GE-NEC-STAC-2,STACKIT,,Yes,Yes,Yes,Yes,Unknown,Operated by Schwarz Group; data centers in Germany and Austria
+Spain,Logroño,SP-LOGR-ARSY-1,Arsys,,Yes,Unknown,Unknown,Yes,Unknown,Part of IONOS Group; main datacenter in Logroño
+Bulgaria,Sofia,BU-SOFI-DELT-1,Delta.bg,,Yes,Unknown,Unknown,Unknown,Unknown,Provides S3-compatible object storage with web-based client
+Cyprus,Nicosia,CY-NICO-TEBI-1,Tebi,,Yes,Yes,Yes,Yes,Unknown,S3-compatible with free tier; geo-distributed storage
+Czech Republic,Brno,CZ-BRNO-NETH-1,nethost.eu,,Yes,Unknown,Unknown,Unknown,Unknown,Czech hosting provider; S3 compatibility to be confirmed
+Germany,Frankfurt,GE-FRAN-SERV-1,ServingA,,Yes,Unknown,Unknown,Unknown,Unknown,German cloud provider; S3 compatibility to be confirmed
+Denmark,Copenhagen,DE-COPE-B4RE-1,B4Restore,,Yes,Unknown,Unknown,Yes,Unknown,Backup and recovery solutions; S3 compatibility to be confirmed
+Estonia,Tallinn,ES-TALL-STOR-1,Storadera,,Yes,Unknown,Yes,Yes,Unknown,Estonian provider with S3-compatible storage
+Finland,Helsinki,FI-HELS-STOR-2,Storadera,,Yes,Unknown,Yes,Yes,Unknown,Estonian provider with S3-compatible storage
+Netherlands,Amsterdam,NE-AMST-STOR-3,Storadera,,Yes,Unknown,Yes,Yes,Unknown,Estonian provider with S3-compatible storage
+Finland,Helsinki,FI-HELS-UPCL-1,UpCloud,,Yes,Unknown,Yes,Yes,Unknown,Object Storage from Helsinki available to all European data centres
+Germany,Frankfurt,GE-FRAN-UPCL-2,UpCloud,,Yes,Unknown,Yes,Yes,Unknown,Object Storage from Helsinki available to all European data centres
+Finland,Helsinki,FI-HELS-HETZ-1,Hetzner,,Yes,Yes,Unknown,Yes,Unknown,S3-compatible object storage with minimum 64KB billing size
+Germany,(Nuremberg,GE-NUR-HETZ-2,Hetzner,,Yes,Yes,Unknown,Yes,Unknown,S3-compatible object storage with minimum 64KB billing size
+France,Paris,FR-PARI-WASA-1,Wasabi,,Yes,Yes,Yes,Yes,Yes,S3-compatible storage with multiple European data centers
+Germany,Frankfurt,GE-FRAN-WASA-2,Wasabi,,Yes,Yes,Yes,Yes,Yes,S3-compatible storage with multiple European data centers
+Italy,Milan,IT-MILA-WASA-3,Wasabi,,Yes,Yes,Yes,Yes,Yes,S3-compatible storage with multiple European data centers
+Netherlands,Amsterdam,NE-AMST-WASA-4,Wasabi,,Yes,Yes,Yes,Yes,Yes,S3-compatible storage with multiple European data centers
+UK,London,UK-LOND-WASA-5,Wasabi,,Yes,Yes,Yes,Yes,Yes,S3-compatible storage with multiple European data centers
+France,Paris,FR-PARI-SCAL-1,Scaleway,,Yes,Yes,Yes,Yes,Unknown,Multi-AZ storage class; Glacier storage in Paris/Amsterdam
+Netherlands,Amsterdam,NE-AMST-SCAL-2,Scaleway,,Yes,Yes,Yes,Yes,Unknown,Multi-AZ storage class; Glacier storage in Paris/Amsterdam
+Poland,Warsaw,PO-WARS-SCAL-3,Scaleway,,Yes,Yes,Yes,Yes,Unknown,Multi-AZ storage class; Glacier storage in Paris/Amsterdam
+France,(Gravelines,FR-GRA-OVHC-1,OVHcloud,,Yes,Yes,Yes,Yes,Yes,S3-compatible object storage; Paris is 3-AZ region
+Germany,Frankfurt,GE-FRAN-OVHC-5,OVHcloud,,Yes,Yes,Yes,Yes,Yes,S3-compatible object storage; Paris is 3-AZ region
+Poland,Warsaw,PO-WARS-OVHC-6,OVHcloud,,Yes,Yes,Yes,Yes,Yes,S3-compatible object storage; Paris is 3-AZ region
+UK,London,UK-LOND-OVHC-7,OVHcloud,,Yes,Yes,Yes,Yes,Yes,S3-compatible object storage; Paris is 3-AZ region
+France,Paris,FR-PARI-CLEV-1,Clever Cloud,,Yes,Unknown,Unknown,Unknown,Unknown,Offers 'Cellar' S3-compatible storage; 100MB/month free
+France,Reims,FR-REIM-IKOU-1,Ikoula,,Yes,Unknown,Unknown,Yes,Unknown,French provider offering S3-compatible storage
+Germany,Karlsruhe,GE-KARL-IONO-1,IONOS,,Yes,Yes,Yes,Yes,Yes,S3-compatible object storage without cold storage
+Spain,Madrid,SP-MADR-IONO-2,IONOS,,Yes,Yes,Yes,Yes,Yes,S3-compatible object storage without cold storage
+UK,London,UK-LOND-IONO-3,IONOS,,Yes,Yes,Yes,Yes,Yes,S3-compatible object storage without cold storage
+Germany,(Munich,GE-MUN-CONT-1,Contabo,,Yes,Unknown,Unknown,Unknown,Unknown,German provider offering S3-compatible object storage
+Germany,Frankfurt,GE-FRAN-INTE-1,Intercolo,,Yes,Unknown,Unknown,Unknown,Unknown,German provider with affordable prices and no egress fees
+Germany,Hamburg,GE-HAMB-IMPO-1,Impossible Cloud,,Yes,Yes,Unknown,Yes,Unknown,100% S3 API compatible with ransomware protection
+Germany,Düsseldorf,GE-DÜSS-MYLO-1,myLoc,,Yes,Unknown,Unknown,Unknown,Unknown,German provider offering S3-compatible storage
+Greece,Athens,GR-ATHE-GLOM-1,Gloman,,Yes,Unknown,Unknown,Unknown,Unknown,Greek provider offering S3-compatible object storage
+France,(Paris,FR-PAR-ORAC-1,Oracle Cloud,,Yes,Unknown,Yes,Yes,Yes,Oracle Cloud Infrastructure with S3-compatible API
+Germany,Frankfurt,GE-FRAN-ORAC-3,Oracle Cloud,,Yes,Unknown,Yes,Yes,Yes,Oracle Cloud Infrastructure with S3-compatible API
+Italy,Milan,IT-MILA-ORAC-4,Oracle Cloud,,Yes,Unknown,Yes,Yes,Yes,Oracle Cloud Infrastructure with S3-compatible API
+Netherlands,Amsterdam,NE-AMST-ORAC-5,Oracle Cloud,,Yes,Unknown,Yes,Yes,Yes,Oracle Cloud Infrastructure with S3-compatible API
+Serbia,Jovanovac,SE-JOVA-ORAC-6,Oracle Cloud,,Yes,Unknown,Yes,Yes,Yes,Oracle Cloud Infrastructure with S3-compatible API
+Spain,Madrid,SP-MADR-ORAC-7,Oracle Cloud,,Yes,Unknown,Yes,Yes,Yes,Oracle Cloud Infrastructure with S3-compatible API
+Sweden,Stockholm,SW-STOC-ORAC-8,Oracle Cloud,,Yes,Unknown,Yes,Yes,Yes,Oracle Cloud Infrastructure with S3-compatible API
+Switzerland,Zurich,SW-ZURI-ORAC-9,Oracle Cloud,,Yes,Unknown,Yes,Yes,Yes,Oracle Cloud Infrastructure with S3-compatible API
+UK,(London,UK-LON-ORAC-10,Oracle Cloud,,Yes,Unknown,Yes,Yes,Yes,Oracle Cloud Infrastructure with S3-compatible API
+France,Paris,FR-PARI-AWS-1,AWS,,Yes,Yes,Yes,Yes,Yes,Amazon S3 - the original S3 service
+Germany,Frankfurt,GE-FRAN-AWS-2,AWS,,Yes,Yes,Yes,Yes,Yes,Amazon S3 - the original S3 service
+Ireland,Dublin,IR-DUBL-AWS-3,AWS,,Yes,Yes,Yes,Yes,Yes,Amazon S3 - the original S3 service
+Italy,Milan,IT-MILA-AWS-4,AWS,,Yes,Yes,Yes,Yes,Yes,Amazon S3 - the original S3 service
+Spain,Madrid,SP-MADR-AWS-5,AWS,,Yes,Yes,Yes,Yes,Yes,Amazon S3 - the original S3 service
+Sweden,Stockholm,SW-STOC-AWS-6,AWS,,Yes,Yes,Yes,Yes,Yes,Amazon S3 - the original S3 service
+Switzerland,Zurich,SW-ZURI-AWS-7,AWS,,Yes,Yes,Yes,Yes,Yes,Amazon S3 - the original S3 service
+UK,London,UK-LOND-AWS-8,AWS,,Yes,Yes,Yes,Yes,Yes,Amazon S3 - the original S3 service
+Italy,Milan,IT-MILA-ARUB-1,Aruba Cloud,,Yes,Unknown,Yes,Yes,Unknown,Italian provider offering S3-compatible storage
+Latvia,Riga,LA-RIGA-CLOU-1,Clouds.lv,,Yes,Unknown,Unknown,Unknown,Unknown,Latvian provider offering S3-compatible storage
+Lithuania,Šiauliai,LI-ŠIAU-CHER-1,Cherry Servers,,Yes,Unknown,Unknown,Unknown,Unknown,Lithuanian provider offering S3-compatible storage
+Luxembourg,Luxembourg City,LU-LUXE-CYCL-1,Cyclop,,Yes,Unknown,Unknown,Unknown,Unknown,Luxembourg-based provider offering S3-compatible storage
+Netherlands,Amsterdam,NE-AMST-BACK-1,Backblaze B2,,Yes,Yes,Yes,Yes,Yes,S3-compatible with 99.9% uptime SLA
+Netherlands,Alkmaar,NE-ALKM-CYSO-1,Cyso,,Yes,Unknown,Unknown,Unknown,Unknown,Dutch provider offering S3-compatible storage
+Netherlands,Amsterdam,NE-AMST-FUGA-1,Fuga Cloud,,Yes,Unknown,Unknown,Unknown,Unknown,S3 compatible object storage without cold storage
+Netherlands,Amsterdam,NE-AMST-TRUE-1,True.nl,,Yes,Unknown,Unknown,Unknown,Unknown,S3-compatible object storage using Amazon S3-API
+France,Paris,FR-PARI-LEAS-1,Leaseweb,,Yes,Unknown,Unknown,Yes,Unknown,Global provider with S3-compatible storage
+Germany,Frankfurt,GE-FRAN-LEAS-2,Leaseweb,,Yes,Unknown,Unknown,Yes,Unknown,Global provider with S3-compatible storage
+Netherlands,Amsterdam,NE-AMST-LEAS-3,Leaseweb,,Yes,Unknown,Unknown,Yes,Unknown,Global provider with S3-compatible storage
+UK,London,UK-LOND-LEAS-4,Leaseweb,,Yes,Unknown,Unknown,Yes,Unknown,Global provider with S3-compatible storage
+Poland,Warsaw,PO-WARS-CLOU-1,CloudFerro,,Yes,Unknown,Unknown,Unknown,Unknown,Polish provider offering S3-compatible storage
+Romania,Bucharest,RO-BUCH-CLOU-1,Cloudify,,Yes,Unknown,Unknown,Unknown,Unknown,Romanian provider offering S3-compatible storage
+Germany,Frankfurt,GE-FRAN-DIGI-1,DigitalOcean,,Yes,Unknown,Yes,Yes,Unknown,"S3-compatible Spaces in FRA1, AMS3, LON1"
+Netherlands,Amsterdam,NE-AMST-DIGI-2,DigitalOcean,,Yes,Unknown,Yes,Yes,Unknown,"S3-compatible Spaces in FRA1, AMS3, LON1"
+UK,London,UK-LOND-DIGI-3,DigitalOcean,,Yes,Unknown,Yes,Yes,Unknown,"S3-compatible Spaces in FRA1, AMS3, LON1"
+Germany,Frankfurt,GE-FRAN-LINO-1,Linode,,Yes,Unknown,Yes,Yes,Unknown,S3-compatible Object Storage in European locations
+Netherlands,Amsterdam,NE-AMST-LINO-2,Linode,,Yes,Unknown,Yes,Yes,Unknown,S3-compatible Object Storage in European locations
+UK,London,UK-LOND-LINO-3,Linode,,Yes,Unknown,Yes,Yes,Unknown,S3-compatible Object Storage in European locations
+Netherlands,Amsterdam,NE-AMST-VULT-1,Vultr,,Yes,Unknown,Yes,Yes,Unknown,S3-compatible Object Storage in European locations
+UK,London,UK-LOND-VULT-2,Vultr,,Yes,Unknown,Yes,Yes,Unknown,S3-compatible Object Storage in European locations
+Germany,Frankfurt,GE-FRAN-ALIB-1,Alibaba Cloud,,Yes,Unknown,Yes,Yes,Unknown,OSS in eu-central-1 (Frankfurt) and eu-west-1 (London)
+UK,London,UK-LOND-ALIB-2,Alibaba Cloud,,Yes,Unknown,Yes,Yes,Unknown,OSS in eu-central-1 (Frankfurt) and eu-west-1 (London)
+Germany,Frankfurt,GE-FRAN-IBM-1,IBM Cloud,,Yes,Unknown,Yes,Yes,Unknown,S3-compatible Cloud Object Storage
+Netherlands,Amsterdam,NE-AMST-IBM-2,IBM Cloud,,Yes,Unknown,Yes,Yes,Unknown,S3-compatible Cloud Object Storage
+Spain,Madrid,SP-MADR-IBM-3,IBM Cloud,,Yes,Unknown,Yes,Yes,Unknown,S3-compatible Cloud Object Storage
+UK,London,UK-LOND-IBM-4,IBM Cloud,,Yes,Unknown,Yes,Yes,Unknown,S3-compatible Cloud Object Storage
+UK,London,UK-LOND-RACK-1,Rackspace,,Yes,Unknown,Yes,Yes,Unknown,S3-compatible Cloud Files in London
+UK,Manchester,UK-MANC-UKFA-1,UKFast,,Yes,Unknown,Unknown,Yes,Unknown,UK provider offering S3-compatible storage
+Switzerland,Geneva,SW-GENE-INFO-1,Infomaniak,,Yes,Unknown,Yes,Yes,Unknown,Swiss provider offering S3-compatible storage
+EU,no country-specific granularity,EU-NO-CLOU-1,Cloudflare R2,,Yes,Yes,Yes,Yes,Unknown,Region selection 'EU' possible; no country-level control
