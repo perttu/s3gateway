@@ -1,3 +1,4 @@
+s3gateway/config/s3_backends.json
 # aider
 .aider.chat.history.md
 .DS_Store
