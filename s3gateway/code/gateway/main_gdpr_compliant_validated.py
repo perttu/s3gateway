@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-S3 Gateway Service - GDPR-Compliant Two-Layer Architecture with S3 Validation
-Uses HTTP redirects and validates S3 naming to prevent backend failures.
+S3 Gateway Service - GDPR-Compliant Two-Layer Architecture with S3 Validation and Authentication
+Uses HTTP redirects, validates S3 naming, and implements AWS SigV4 authentication.
 """
 
 import os
@@ -34,6 +34,10 @@ from location_constraint import LocationConstraintParser, LocationConstraintMana
 from s3_tagging import S3TagManager, S3TaggingError, ReplicaCountManager
 from replication_queue import replication_queue, replication_manager, ReplicationQueue, ReplicationManager
 
+# Import S3 authentication and authorization modules
+from s3_auth import S3CredentialManager, S3AuthMiddleware, S3Credentials, S3AuthError
+from credential_api import CredentialManagerService
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -44,7 +48,9 @@ REGION_ID = os.getenv('REGION_ID', 'FI-HEL')
 REGIONAL_ENDPOINTS = json.loads(os.getenv('REGIONAL_ENDPOINTS', '{}'))
 ENABLE_GDPR_REDIRECTS = os.getenv('ENABLE_GDPR_REDIRECTS', 'true').lower() == 'true'
 ENABLE_S3_VALIDATION = os.getenv('ENABLE_S3_VALIDATION', 'true').lower() == 'true'
+ENABLE_S3_AUTHENTICATION = os.getenv('ENABLE_S3_AUTHENTICATION', 'true').lower() == 'true'
 S3_VALIDATION_STRICT = os.getenv('S3_VALIDATION_STRICT', 'false').lower() == 'true'
+S3_AUTH_BYPASS_ENDPOINTS = json.loads(os.getenv('S3_AUTH_BYPASS_ENDPOINTS', '["/health", "/api/credentials"]'))
 
 # Database connections
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -66,11 +72,15 @@ else:
     global_engine = None
     GlobalSessionLocal = None
 
+# Authentication setup
+credential_manager_service = None
+s3_auth_middleware = None
+
 # FastAPI app
 app = FastAPI(
     title=f"S3 Gateway Service ({GATEWAY_TYPE})",
-    description=f"GDPR-compliant two-layer S3 gateway with validation - {GATEWAY_TYPE} tier",
-    version="3.2.0"
+    description=f"GDPR-compliant two-layer S3 gateway with validation and authentication - {GATEWAY_TYPE} tier",
+    version="4.0.0"
 )
 
 # CORS middleware
@@ -103,13 +113,183 @@ def create_s3_error_response(error_code: str, message: str, bucket_name: str = N
     
     return Response(
         content=error_xml,
-        status_code=400,
+        status_code=403 if error_code in ['AccessDenied', 'InvalidAccessKeyId', 'SignatureDoesNotMatch'] else 400,
         media_type="application/xml",
         headers={
-            "X-S3-Validation-Error": "true",
+            "X-S3-Error": "true",
             "X-Error-Code": error_code
         }
     )
+
+def log_auth_attempt(access_key_id: str, request: Request, auth_status: str, error_message: str = None):
+    """Log authentication attempt for audit purposes"""
+    try:
+        with SessionLocal() as db:
+            query = text("""
+                INSERT INTO s3_auth_log 
+                (access_key_id, request_method, request_path, request_query_string, 
+                 auth_status, error_message, source_ip, user_agent, request_timestamp)
+                VALUES 
+                (:access_key_id, :request_method, :request_path, :request_query_string,
+                 :auth_status, :error_message, :source_ip, :user_agent, :request_timestamp)
+            """)
+            
+            db.execute(query, {
+                'access_key_id': access_key_id,
+                'request_method': request.method,
+                'request_path': str(request.url.path),
+                'request_query_string': str(request.url.query) if request.url.query else None,
+                'auth_status': auth_status,
+                'error_message': error_message,
+                'source_ip': request.client.host if request.client else None,
+                'user_agent': request.headers.get('user-agent'),
+                'request_timestamp': datetime.utcnow()
+            })
+            db.commit()
+    except Exception as e:
+        logger.error(f"Failed to log auth attempt: {e}")
+
+@app.middleware("http")
+async def s3_authentication_middleware(request: Request, call_next):
+    """S3 Authentication and Authorization middleware with GDPR-compliant routing"""
+    
+    # Skip authentication for certain endpoints
+    skip_auth = any(request.url.path.startswith(endpoint) for endpoint in S3_AUTH_BYPASS_ENDPOINTS)
+    
+    if not ENABLE_S3_AUTHENTICATION or skip_auth:
+        response = await call_next(request)
+        response.headers['X-S3-Auth'] = 'disabled' if not ENABLE_S3_AUTHENTICATION else 'bypassed'
+        return response
+    
+    # OPTION 3: Authentication After Redirect - GDPR Compliant Approach
+    if GATEWAY_TYPE == 'global':
+        # Global gateway: Skip authentication, do routing first
+        # S3 requests will be redirected to regional endpoints for authentication
+        if request.url.path.startswith('/s3/'):
+            # Extract customer ID for routing (no authentication needed yet)
+            customer_id = (
+                request.headers.get('X-Customer-ID') or
+                request.query_params.get('customer_id') or
+                'demo-customer'
+            )
+            
+            logger.info(f"Global gateway: Routing S3 request for customer {customer_id} (auth deferred to regional)")
+            
+            # Continue with routing middleware (will redirect to regional)
+            response = await call_next(request)
+            response.headers['X-S3-Auth'] = 'deferred-to-regional'
+            response.headers['X-Auth-Strategy'] = 'route-first-authenticate-regional'
+            return response
+        
+        # Non-S3 requests processed locally (but unlikely to need auth)
+        response = await call_next(request)
+        response.headers['X-S3-Auth'] = 'not-required-global'
+        return response
+    
+    elif GATEWAY_TYPE == 'regional':
+        # Regional gateway: Full authentication for S3 requests
+        if request.url.path.startswith('/s3/'):
+            logger.info(f"Regional gateway ({REGION_ID}): Authenticating S3 request")
+            
+            # Get request body for signature validation
+            body = await request.body()
+            
+            # Prepare headers dictionary
+            headers = dict(request.headers)
+            
+            try:
+                # Authenticate request using regional database
+                is_authenticated, credentials, auth_error = s3_auth_middleware.authenticate_request(
+                    method=request.method,
+                    path=request.url.path,
+                    query_string=str(request.url.query) if request.url.query else "",
+                    headers=headers,
+                    body=body
+                )
+                
+                if not is_authenticated:
+                    # Log failed authentication
+                    access_key_id = None
+                    auth_header = headers.get('authorization') or headers.get('Authorization')
+                    if auth_header and 'Credential=' in auth_header:
+                        try:
+                            cred_part = auth_header.split('Credential=')[1].split(',')[0]
+                            access_key_id = cred_part.split('/')[0]
+                        except:
+                            pass
+                    
+                    log_auth_attempt(access_key_id, request, 'failed', auth_error)
+                    
+                    # Return S3-compatible error
+                    if 'Missing Authorization header' in auth_error:
+                        error_code = 'MissingSecurityHeader'
+                    elif 'Invalid access key' in auth_error:
+                        error_code = 'InvalidAccessKeyId'
+                    elif 'Signature' in auth_error:
+                        error_code = 'SignatureDoesNotMatch'
+                    else:
+                        error_code = 'AccessDenied'
+                    
+                    return create_s3_error_response(error_code, auth_error)
+                
+                # Authorize request
+                is_authorized, auth_error = s3_auth_middleware.authorize_request(
+                    credentials=credentials,
+                    method=request.method,
+                    path=request.url.path,
+                    query_string=str(request.url.query) if request.url.query else ""
+                )
+                
+                if not is_authorized:
+                    # Log authorization failure
+                    log_auth_attempt(credentials.access_key_id, request, 'access_denied', auth_error)
+                    return create_s3_error_response('AccessDenied', auth_error)
+                
+                # Log successful authentication
+                log_auth_attempt(credentials.access_key_id, request, 'success')
+                
+                # Add authenticated user info to request
+                request.state.s3_credentials = credentials
+                request.state.authenticated_user_id = credentials.user_id
+                
+                # Process request
+                response = await call_next(request)
+                
+                # Add authentication headers to response
+                response.headers['X-S3-Auth'] = 'authenticated-regional'
+                response.headers['X-Authenticated-User'] = credentials.user_id
+                response.headers['X-Auth-Region'] = REGION_ID
+                
+                # Update last used timestamp
+                try:
+                    with SessionLocal() as db:
+                        query = text("""
+                            UPDATE s3_credentials 
+                            SET last_used_at = CURRENT_TIMESTAMP
+                            WHERE access_key_id = :access_key_id
+                        """)
+                        db.execute(query, {'access_key_id': credentials.access_key_id})
+                        db.commit()
+                except Exception as e:
+                    logger.error(f"Failed to update last used timestamp: {e}")
+                
+                return response
+                
+            except Exception as e:
+                logger.error(f"Regional authentication middleware error: {e}")
+                return create_s3_error_response('InternalError', 'Authentication system error')
+        
+        # Non-S3 requests in regional gateway (no auth needed typically)
+        response = await call_next(request)
+        response.headers['X-S3-Auth'] = 'not-required-regional'
+        return response
+    
+    else:
+        # Unknown gateway type
+        logger.error(f"Unknown GATEWAY_TYPE: {GATEWAY_TYPE}")
+        response = await call_next(request)
+        response.headers['X-S3-Auth'] = 'unknown-gateway-type'
+        return response
 
 class S3Backend:
     """S3 backend wrapper for regional gateways"""
@@ -249,7 +429,27 @@ def load_providers():
 @app.on_event("startup")
 async def startup_event():
     """Initialize application"""
+    global credential_manager_service, s3_auth_middleware
+    
     logger.info(f"Starting S3 Gateway Service in {GATEWAY_TYPE} mode...")
+    
+    # Initialize authentication system
+    if ENABLE_S3_AUTHENTICATION:
+        logger.info("Initializing S3 authentication system...")
+        try:
+            credential_manager_service = CredentialManagerService(SessionLocal())
+            s3_auth_middleware = S3AuthMiddleware(credential_manager_service.get_manager())
+            
+            # Include credential management API routes
+            app.include_router(credential_manager_service.get_router())
+            
+            logger.info("✅ S3 authentication system initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize authentication: {e}")
+            if ENABLE_S3_AUTHENTICATION:
+                raise  # Fail startup if auth is required but can't be initialized
+    else:
+        logger.warning("⚠️  S3 authentication disabled - all requests will be accepted")
     
     # Initialize replication queue for regional gateways
     if GATEWAY_TYPE == 'regional':
@@ -405,6 +605,15 @@ if GATEWAY_TYPE == 'global':
                         "endpoint": endpoint
                     }
         
+        # Check authentication system configuration for global gateway
+        auth_strategy = "route-first-authenticate-regional"
+        if ENABLE_S3_AUTHENTICATION:
+            auth_status = "configured-regional-only"
+            auth_note = "Authentication deferred to regional gateways (GDPR compliant)"
+        else:
+            auth_status = "disabled"
+            auth_note = "Authentication disabled globally"
+        
         return {
             "status": "healthy",
             "service": "s3-gateway-global",
@@ -414,237 +623,20 @@ if GATEWAY_TYPE == 'global':
                 "enabled": ENABLE_S3_VALIDATION,
                 "strict_mode": S3_VALIDATION_STRICT
             },
-            "replication_queue": "Not applicable (global gateway)",
-            "regional_endpoints": regional_status
-        }
-    
-    @app.get("/validation/test")
-    async def test_validation(bucket_name: str = None, object_key: str = None):
-        """Test S3 validation without performing operations"""
-        if not ENABLE_S3_VALIDATION:
-            return {"validation": "disabled", "message": "S3 validation is disabled"}
-        
-        try:
-            report = validator.get_validation_report(bucket_name, object_key, S3_VALIDATION_STRICT)
-            return report
-        except Exception as e:
-            return {"error": str(e), "validation": "failed"}
-
-    # S3 Tagging API endpoints for global gateway (redirect to regional)
-    @app.get("/s3/{bucket_name}?tagging")
-    async def get_bucket_tagging_global(
-        request: Request,
-        bucket_name: str,
-        x_customer_id: str = Header(alias="X-Customer-ID", default="demo-customer")
-    ):
-        """Get bucket tagging - redirect to regional endpoint"""
-        customer_region = router_service.get_customer_region(x_customer_id) or router_service.get_default_region()
-        regional_endpoint = router_service.get_regional_endpoint(customer_region)
-        
-        if not regional_endpoint:
-            raise HTTPException(status_code=503, detail=f"Regional endpoint for {customer_region} not available")
-        
-        redirect_url = f"{regional_endpoint}/s3/{bucket_name}?tagging"
-        return RedirectResponse(url=redirect_url, status_code=307)
-    
-    @app.put("/s3/{bucket_name}?tagging")
-    async def put_bucket_tagging_global(
-        request: Request,
-        bucket_name: str,
-        x_customer_id: str = Header(alias="X-Customer-ID", default="demo-customer")
-    ):
-        """Put bucket tagging - redirect to regional endpoint"""
-        customer_region = router_service.get_customer_region(x_customer_id) or router_service.get_default_region()
-        regional_endpoint = router_service.get_regional_endpoint(customer_region)
-        
-        if not regional_endpoint:
-            raise HTTPException(status_code=503, detail=f"Regional endpoint for {customer_region} not available")
-        
-        redirect_url = f"{regional_endpoint}/s3/{bucket_name}?tagging"
-        return RedirectResponse(url=redirect_url, status_code=307)
-    
-    @app.delete("/s3/{bucket_name}?tagging")
-    async def delete_bucket_tagging_global(
-        request: Request,
-        bucket_name: str,
-        x_customer_id: str = Header(alias="X-Customer-ID", default="demo-customer")
-    ):
-        """Delete bucket tagging - redirect to regional endpoint"""
-        customer_region = router_service.get_customer_region(x_customer_id) or router_service.get_default_region()
-        regional_endpoint = router_service.get_regional_endpoint(customer_region)
-        
-        if not regional_endpoint:
-            raise HTTPException(status_code=503, detail=f"Regional endpoint for {customer_region} not available")
-        
-        redirect_url = f"{regional_endpoint}/s3/{bucket_name}?tagging"
-        return RedirectResponse(url=redirect_url, status_code=307)
-    
-    @app.get("/s3/{bucket_name}/{object_key:path}?tagging")
-    async def get_object_tagging_global(
-        request: Request,
-        bucket_name: str,
-        object_key: str,
-        x_customer_id: str = Header(alias="X-Customer-ID", default="demo-customer")
-    ):
-        """Get object tagging - redirect to regional endpoint"""
-        customer_region = router_service.get_customer_region(x_customer_id) or router_service.get_default_region()
-        regional_endpoint = router_service.get_regional_endpoint(customer_region)
-        
-        if not regional_endpoint:
-            raise HTTPException(status_code=503, detail=f"Regional endpoint for {customer_region} not available")
-        
-        redirect_url = f"{regional_endpoint}/s3/{bucket_name}/{object_key}?tagging"
-        return RedirectResponse(url=redirect_url, status_code=307)
-    
-    @app.put("/s3/{bucket_name}/{object_key:path}?tagging")
-    async def put_object_tagging_global(
-        request: Request,
-        bucket_name: str,
-        object_key: str,
-        x_customer_id: str = Header(alias="X-Customer-ID", default="demo-customer")
-    ):
-        """Put object tagging - redirect to regional endpoint"""
-        customer_region = router_service.get_customer_region(x_customer_id) or router_service.get_default_region()
-        regional_endpoint = router_service.get_regional_endpoint(customer_region)
-        
-        if not regional_endpoint:
-            raise HTTPException(status_code=503, detail=f"Regional endpoint for {customer_region} not available")
-        
-        redirect_url = f"{regional_endpoint}/s3/{bucket_name}/{object_key}?tagging"
-        return RedirectResponse(url=redirect_url, status_code=307)
-    
-    @app.delete("/s3/{bucket_name}/{object_key:path}?tagging")
-    async def delete_object_tagging_global(
-        request: Request,
-        bucket_name: str,
-        object_key: str,
-        x_customer_id: str = Header(alias="X-Customer-ID", default="demo-customer")
-    ):
-        """Delete object tagging - redirect to regional endpoint"""
-        customer_region = router_service.get_customer_region(x_customer_id) or router_service.get_default_region()
-        regional_endpoint = router_service.get_regional_endpoint(customer_region)
-        
-        if not regional_endpoint:
-            raise HTTPException(status_code=503, detail=f"Regional endpoint for {customer_region} not available")
-        
-        redirect_url = f"{regional_endpoint}/s3/{bucket_name}/{object_key}?tagging"
-        return RedirectResponse(url=redirect_url, status_code=307)
-
-# Regional Gateway Routes (GATEWAY_TYPE == 'regional')  
-elif GATEWAY_TYPE == 'regional':
-    
-    def get_customer_info(customer_id: str) -> Optional[Dict]:
-        """Get full customer information from regional database"""
-        with SessionLocal() as db:
-            query = text("""
-                SELECT customer_id, customer_name, region_id, country, 
-                       data_residency_requirement, compliance_requirements, 
-                       compliance_status, next_compliance_review
-                FROM customers 
-                WHERE customer_id = :customer_id
-            """)
-            
-            result = db.execute(query, {'customer_id': customer_id}).fetchone()
-            return dict(result) if result else None
-    
-    def get_customer_objects(customer_id: str, bucket_name: str = None):
-        """Get customer objects from regional metadata"""
-        with SessionLocal() as db:
-            where_clause = "WHERE om.customer_id = :customer_id"
-            params = {'customer_id': customer_id}
-            
-            if bucket_name:
-                where_clause += " AND om.bucket_name = :bucket_name"
-                params['bucket_name'] = bucket_name
-            
-            query = text(f"""
-                SELECT om.object_id, om.bucket_name, om.object_key, om.version_id, 
-                       om.size_bytes, om.etag, om.content_type, om.replicas, 
-                       om.sync_status, om.compliance_status, om.legal_hold,
-                       c.customer_name, c.data_residency_requirement
-                FROM object_metadata om
-                JOIN customers c ON om.customer_id = c.customer_id
-                {where_clause}
-                ORDER BY om.created_at DESC
-                LIMIT 1000
-            """)
-            
-            result = db.execute(query, params)
-            return [dict(row) for row in result]
-    
-    def log_regional_operation(customer_id: str, operation_type: str, bucket_name: str, 
-                              object_key: str, request: Request, status_code: int, 
-                              bytes_transferred: int = 0):
-        """Log operation in regional database with FULL compliance info"""
-        with SessionLocal() as db:
-            query = text("""
-                INSERT INTO operations_log 
-                (customer_id, operation_type, bucket_name, object_key, 
-                 request_id, user_agent, source_ip, status_code, bytes_transferred,
-                 compliance_info, created_at)
-                VALUES (:customer_id, :operation_type, :bucket_name, :object_key,
-                        :request_id, :user_agent, :source_ip, :status_code, :bytes_transferred,
-                        :compliance_info, CURRENT_TIMESTAMP)
-            """)
-            
-            # Determine if this was a redirected request
-            redirected = request.headers.get('X-GDPR-Redirect') == 'true'
-            s3_validation = request.headers.get('X-S3-Validation', 'unknown')
-            
-            compliance_info = {
-                "region_processed": REGION_ID,
-                "direct_regional_access": not redirected,
-                "gdpr_redirect": redirected,
-                "cross_border_transfer": False,
-                "legal_basis": "legitimate_interest",
-                "data_sovereignty_compliant": True,
-                "s3_validation_enabled": ENABLE_S3_VALIDATION,
-                "s3_validation_status": s3_validation
-            }
-            
-            db.execute(query, {
-                'customer_id': customer_id,
-                'operation_type': operation_type,
-                'bucket_name': bucket_name,
-                'object_key': object_key,
-                'request_id': request.headers.get('X-Request-ID', str(uuid.uuid4())),
-                'user_agent': request.headers.get('user-agent', ''),
-                'source_ip': str(request.client.host) if request.client else None,
-                'status_code': status_code,
-                'bytes_transferred': bytes_transferred,
-                'compliance_info': json.dumps(compliance_info)
-            })
-            db.commit()
-    
-    @app.get("/health")
-    async def regional_health():
-        """Regional gateway health check"""
-        customer_count = 0
-        try:
-            with SessionLocal() as db:
-                query = text("SELECT COUNT(*) FROM customers WHERE region_id = :region_id")
-                result = db.execute(query, {'region_id': REGION_ID}).fetchone()
-                customer_count = result[0] if result else 0
-        except:
-            pass
-        
-        return {
-            "status": "healthy",
-            "service": f"s3-gateway-regional-{REGION_ID}",
-            "region": REGION_ID,
-            "database": "connected" if engine else "disconnected",
-            "customer_count": customer_count,
-            "backend_count": len(s3_backends),
-            "gdpr_compliance": "Full customer data stored regionally",
-            "s3_validation": {
-                "enabled": ENABLE_S3_VALIDATION,
-                "strict_mode": S3_VALIDATION_STRICT
+            "s3_authentication": {
+                "strategy": auth_strategy,
+                "global_auth": False,
+                "regional_auth": True,
+                "status": auth_status,
+                "note": auth_note,
+                "flow": "1. Route to region → 2. Authenticate at regional → 3. Process request"
             },
-            "replication_queue": {
-                "running": replication_queue.running,
-                "worker_count": len(replication_queue.workers),
-                "active_jobs": len(replication_queue.active_jobs),
-                "completed_jobs": len(replication_queue.completed_jobs)
+            "replication_queue": "Not applicable (global gateway)",
+            "regional_endpoints": regional_status,
+            "architecture": {
+                "type": "two-layer-gdpr-compliant",
+                "credential_storage": "regional-databases-only",
+                "data_sovereignty": "enforced-by-routing"
             }
         }
     
@@ -1091,6 +1083,73 @@ async def root():
 
 # Replication Queue Management API (Regional Gateway Only)
 if GATEWAY_TYPE == 'regional':
+    @app.get("/health")
+    async def regional_health():
+        """Regional gateway health check with authentication status"""
+        customer_count = 0
+        active_credentials_count = 0
+        try:
+            with SessionLocal() as db:
+                # Get customer count for this region
+                customer_query = text("SELECT COUNT(*) FROM customers WHERE region_id = :region_id")
+                customer_result = db.execute(customer_query, {'region_id': REGION_ID}).fetchone()
+                customer_count = customer_result[0] if customer_result else 0
+                
+                # Get active credentials count for this region
+                if ENABLE_S3_AUTHENTICATION:
+                    cred_query = text("SELECT COUNT(*) FROM s3_credentials WHERE is_active = true")
+                    cred_result = db.execute(cred_query).fetchone()
+                    active_credentials_count = cred_result[0] if cred_result else 0
+        except:
+            pass
+        
+        # Check replication queue status
+        replication_status = "not-running"
+        if replication_queue.running:
+            replication_status = "running"
+        
+        # Authentication configuration for regional gateway
+        auth_strategy = "regional-authentication"
+        if ENABLE_S3_AUTHENTICATION:
+            auth_status = "enabled-and-active"
+            auth_note = f"Regional gateway handles authentication with {active_credentials_count} active credentials"
+        else:
+            auth_status = "disabled"
+            auth_note = "Authentication disabled for this regional gateway"
+        
+        return {
+            "status": "healthy",
+            "service": f"s3-gateway-regional-{REGION_ID}",
+            "region": REGION_ID,
+            "database": "connected" if engine else "disconnected",
+            "customer_count": customer_count,
+            "backend_count": len(s3_backends),
+            "s3_validation": {
+                "enabled": ENABLE_S3_VALIDATION,
+                "strict_mode": S3_VALIDATION_STRICT
+            },
+            "s3_authentication": {
+                "strategy": auth_strategy,
+                "regional_auth": True,
+                "global_auth": False,
+                "status": auth_status,
+                "active_credentials": active_credentials_count,
+                "note": auth_note,
+                "flow": "Authenticate → Authorize → Process (all in regional)"
+            },
+            "replication_queue": {
+                "status": replication_status,
+                "workers": len(replication_queue.workers) if replication_queue.running else 0,
+                "active_jobs": len(replication_queue.active_jobs) if replication_queue.running else 0
+            },
+            "architecture": {
+                "type": "regional-gdpr-compliant",
+                "credential_storage": "this-regional-database",
+                "data_processing": "local-only",
+                "role": "Full S3 operations with authentication and data processing"
+            }
+        }
+    
     @app.get("/api/replication/queue/status")
     async def get_replication_queue_status():
         """Get replication queue status"""

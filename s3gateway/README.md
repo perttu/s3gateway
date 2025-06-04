@@ -4,6 +4,7 @@ A dockerized S3-compatible gateway service with real S3 backend integration, dat
 
 ## Features
 
+- **S3 Authentication & Authorization**: Full AWS SigV4 signature validation with credential management
 - **Real S3 Backend Integration**: Connects to actual S3-compatible storage providers
 - **S3-Compatible API**: Full S3 operations (GET, PUT, DELETE, LIST) with `/s3/` prefix
 - **S3 RFC-Compliant Validation**: Validates bucket names and object keys to prevent backend failures
@@ -52,812 +53,286 @@ A dockerized S3-compatible gateway service with real S3 backend integration, dat
                                       └─────────────────┘
 ```
 
-## Directory Structure
+## S3 Authentication and Authorization
 
-```
-s3gateway/
-├── docker-compose.yml          # Main orchestration
-├── config/
-│   ├── s3proxy.conf           # S3Proxy configuration
-│   └── s3_backends.json       # Real S3 backend configuration
-├── docker/
-│   ├── s3proxy/
-│   │   ├── Dockerfile         # S3Proxy container
-│   │   └── s3proxy.conf       # S3Proxy config
-│   └── gateway/
-│       ├── Dockerfile         # Gateway service container
-│       └── requirements.txt   # Python dependencies
-├── code/
-│   └── gateway/
-│       ├── main.py           # FastAPI application
-│       ├── schema.sql        # Database schema (used by docker-compose)
-│       └── Dockerfile        # Gateway dockerfile
-├── providers_flat.csv         # Provider data
-└── README.md
-```
+The gateway implements comprehensive AWS SigV4 authentication with fine-grained authorization to secure all S3 operations. This ensures that only authenticated users with proper permissions can access resources.
 
-## Quick Start
+### GDPR-Compliant Authentication Architecture
 
-1. **Start the services:**
-```bash
-cd s3gateway
-./start.sh
-```
+The system uses **Option 3: Authentication After Redirect** - a GDPR-compliant approach where:
 
-2. **Run comprehensive tests:**
-```bash
-./test.sh
-```
+1. **Global Gateway**: Routes requests without authentication (minimal data processing)
+2. **Regional Gateways**: Handle authentication using regional databases only
+3. **Credential Storage**: All credentials stored in regional databases only
 
-3. **Check service status:**
-```bash
-docker-compose ps
-curl http://localhost:8000/health
-```
-
-4. **View logs:**
-```bash
-docker-compose logs -f
-```
-
-5. **GDPR compliance demo:**
-```bash
-./demo-gdpr-compliance.sh
-```
-
-6. **Bucket mapping demo:**
-```bash
-./demo-bucket-mapping.sh
-```
-
-## API Endpoints
-
-### Gateway Management
-- `GET /health` - Health check with backend status
-- `GET /providers` - List available providers from CSV
-- `GET /backends` - List configured S3 backends
-- `GET /api/replicas/status` - Get object replication status
-- `GET /api/operations/log` - View operations log
-
-### S3-Compatible API (All with `/s3/` prefix)
-- `GET /s3` - List buckets (shows logical names to customers)
-- `PUT /s3/{bucket}` - Create bucket (creates hash-mapped backend buckets)
-- `GET /s3/{bucket}` - List objects in bucket
-- `GET /s3/{bucket}/{key}` - Get object
-- `PUT /s3/{bucket}/{key}` - Put object
-- `DELETE /s3/{bucket}/{key}` - Delete object
-
-### Bucket Hash Mapping API
-- `GET /api/bucket-mappings/{customer_id}` - List customer bucket mappings
-- `GET /api/bucket-mappings/{customer_id}/{logical_name}` - Get specific bucket mapping
-- `POST /api/bucket-mappings/test` - Test bucket mapping generation
-
-### LocationConstraint API
-- `GET /api/location-constraints/{customer_id}/{logical_name}` - Get bucket location policy
-- `PUT /api/location-constraints/{customer_id}/{logical_name}/replica-count` - Update replica count
-- `POST /api/location-constraints/test` - Test location constraint parsing
-- `GET /api/location-constraints/available-locations` - List available regions and zones
-
-### S3 Tagging API (S3-Compatible)
-- `GET /s3/{bucket}?tagging` - Get bucket tags
-- `PUT /s3/{bucket}?tagging` - Set bucket tags (triggers replica count changes)
-- `DELETE /s3/{bucket}?tagging` - Delete bucket tags
-- `GET /s3/{bucket}/{key}?tagging` - Get object tags
-- `PUT /s3/{bucket}/{key}?tagging` - Set object tags (triggers replica count changes)
-- `DELETE /s3/{bucket}/{key}?tagging` - Delete object tags
-
-### Replication Queue API (Regional Gateway Only)
-- `GET /api/replication/queue/status` - Get replication queue status
-- `GET /api/replication/jobs/active` - List active replication jobs
-- `GET /api/replication/jobs/{job_id}` - Get specific job status
-- `DELETE /api/replication/jobs/{job_id}` - Cancel replication job
-- `POST /api/replication/jobs/add-replica` - Schedule replica addition
-- `POST /api/replication/jobs/remove-replica` - Schedule replica removal
-
-## Configuration
-
-### Environment Variables
-
-- `DATABASE_URL`: PostgreSQL connection string
-- `S3PROXY_URL`: S3Proxy service URL (for fallback)
-- `PROVIDERS_FILE`: Path to providers CSV file
-- `S3_BACKENDS_CONFIG`: Path to S3 backends JSON configuration
-
-### S3 Backends Configuration
-
-The service loads real S3 backend configurations from `config/s3_backends.json`:
-
-```json
-{
-  "spacetime": {
-    "provider": "Spacetime",
-    "zone_code": "FI-HEL-ST-1",
-    "region": "FI-HEL",
-    "endpoint": "https://hel1.your-objectstorage.com",
-    "access_key": "your-access-key",
-    "secret_key": "your-secret-key",
-    "is_primary": true,
-    "enabled": true
-  }
-}
-```
-
-### Provider Data
-
-The service loads provider information from `providers_flat.csv` containing Finnish providers:
-- Zone codes and regions (Helsinki focus)
-- Provider capabilities (S3 compatibility, Object Lock, Versioning)
-- Compliance information (ISO 27001, GDPR)
-- Geographic location data
-
-## Usage Examples
-
-### Using AWS CLI
-
-1. **Configure AWS CLI:**
-```bash
-aws configure set aws_access_key_id local-identity
-aws configure set aws_secret_access_key local-credential
-aws configure set default.region us-east-1
-```
-
-2. **Create bucket:**
-```bash
-aws s3 mb s3://my-data-bucket --endpoint-url http://localhost:8080
-```
-
-3. **List buckets:**
-```bash
-aws s3 ls --endpoint-url http://localhost:8080
-```
-
-4. **Upload file:**
-```bash
-echo "Hello World" > test.txt
-aws s3 cp test.txt s3://my-data-bucket/ --endpoint-url http://localhost:8080
-```
-
-5. **List objects:**
-```bash
-aws s3 ls s3://my-data-bucket/ --endpoint-url http://localhost:8080
-```
-
-### Using Direct API
-
-1. **Create bucket:**
-```bash
-curl -X PUT -H "X-Customer-ID: my-company" "http://localhost:8000/s3/my-data-bucket"
-```
-
-2. **List buckets:**
-```bash
-curl -H "X-Customer-ID: my-company" "http://localhost:8000/s3"
-```
-
-3. **Upload object:**
-```bash
-curl -X PUT -H "X-Customer-ID: my-company" \
-  -d "Hello World" "http://localhost:8000/s3/my-data-bucket/documents/test.txt"
-```
-
-4. **Get object:**
-```bash
-curl -H "X-Customer-ID: my-company" "http://localhost:8000/s3/my-data-bucket/documents/test.txt"
-```
-
-5. **List objects:**
-```bash
-curl -H "X-Customer-ID: my-company" "http://localhost:8000/s3/my-data-bucket"
-```
-
-### Check System Status
-
-```bash
-# Check health and backend status
-curl "http://localhost:8000/health"
-
-# List configured backends
-curl "http://localhost:8000/backends"
-
-# Test bucket mapping generation
-curl -X POST "http://localhost:8000/api/bucket-mappings/test" \
-  -H "Content-Type: application/json" \
-  -d '{"customer_id": "test-customer", "region_id": "FI-HEL", "logical_name": "test-bucket"}'
-
-# List customer bucket mappings
-curl "http://localhost:8000/api/bucket-mappings/test-customer"
-
-# View replication status
-curl "http://localhost:8000/api/replicas/status"
-
-# View operations log
-curl "http://localhost:8000/api/operations/log"
-```
-
-## Database Schema
-
-The service uses PostgreSQL to store:
-
-- **Providers**: Available S3 providers and their capabilities
-- **Buckets**: Bucket metadata and location information
-- **Objects**: Object metadata with versioning and immutability tracking
-- **Object Replicas**: Detailed replica status for each zone
-- **Sync Jobs**: Queue for managing data replication
-- **Operations Log**: All S3 operations for auditing
-- **Replication Rules**: Data sovereignty and replication requirements
-- **Bucket Mappings**: Mapping between customer logical names and backend bucket names
-
-### Key Features
-
-- **Metadata Authority**: PostgreSQL is the single source of truth
-- **Versioning**: Each object upload gets a unique version ID
-- **Immutability**: Objects are tracked as immutable with replica verification
-- **Multi-Zone Replication**: Objects are replicated across multiple S3 backends
-- **Bucket Hash Mapping**: Solves S3 global namespace collisions with deterministic hashing
-
-### Database Access
-
-```bash
-# Connect to PostgreSQL
-docker-compose exec postgres psql -U s3gateway -d s3gateway
-
-# View tables
-\dt
-
-# Check operations log
-SELECT * FROM operations_log ORDER BY created_at DESC LIMIT 10;
-
-# Check bucket mappings
-SELECT customer_id, logical_name, backend_mapping 
-FROM bucket_mappings ORDER BY created_at DESC LIMIT 10;
-
-# Check backend bucket names
-SELECT customer_id, logical_name, backend_id, backend_name 
-FROM backend_bucket_names ORDER BY created_at DESC LIMIT 10;
-
-# Check object replication status
-SELECT object_key, current_replica_count, required_replica_count, sync_status 
-FROM objects ORDER BY created_at DESC LIMIT 10;
-```
-
-## Data Sovereignty Features
-
-The gateway includes several features for data sovereignty compliance:
-
-1. **Provider Selection**: Automatically selects providers based on country requirements
-2. **Metadata Tracking**: All operations logged with zone and provider information
-3. **Region Restrictions**: Enforce data residency requirements through configuration
-4. **Replica Management**: Track and verify data replicas across zones
-
-### Current Configuration
-
-The service is configured for Finnish data sovereignty:
-
-```sql
--- Helsinki region providers
-INSERT INTO providers (country, region_city, zone_code, provider_name, endpoint) VALUES
-('Finland', 'Helsinki', 'FI-HEL-ST-1', 'Spacetime', 'hel1.your-objectstorage.com'),
-('Finland', 'Helsinki', 'FI-HEL-UC-1', 'Upcloud', 'f969k.upcloudobjects.com'),
-('Finland', 'Helsinki', 'FI-HEL-HZ-1', 'Hetzner', 's3c.tns.cx');
-```
-
-## Monitoring
-
-- **Health Check**: `GET /health` with backend status
-- **Operations Log**: View all S3 operations in the database
-- **Replica Status**: Check object replication across zones
-- **Provider Status**: Check available providers and their capabilities
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Backend Connection Failed**:
-   ```bash
-   curl http://localhost:8000/backends
-   # Check S3 credentials in s3_backends.json
-   ```
-
-2. **Database Connection Failed**:
-   ```bash
-   docker-compose logs postgres
-   docker-compose restart postgres
-   ```
-
-3. **Object Not Found**:
-   ```bash
-   # Check if object exists in metadata
-   curl http://localhost:8000/api/operations/log
-   ```
-
-### Reset Services
-
-```bash
-# Stop all services
-docker-compose down
-
-# Remove volumes (clears database)
-docker-compose down -v
-
-# Rebuild and start
-docker-compose up --build -d
-
-# Initialize bucket
-curl -X POST http://localhost:8000/initialize-bucket
-```
-
-## Security Features
-
-- **Immutable Storage**: Objects cannot be modified once written
-- **Versioning**: All object changes create new versions
-- **Metadata Verification**: Database serves as authority for object existence
-- **Multi-Zone Replication**: Data automatically replicated for durability
-- **Operation Logging**: All operations tracked for audit trails
-
-## Production Considerations
-
-For production deployment, consider:
-
-1. **Credentials Management**: Use proper secrets management for S3 credentials
-2. **SSL/TLS**: Enable HTTPS for all endpoints
-3. **Authentication**: Add proper S3 signature validation
-4. **Load Balancing**: Distribute requests across multiple gateway instances
-5. **Monitoring**: Add metrics collection and alerting
-6. **Backup**: Regular database backups for metadata
-7. **Performance**: Optimize database queries and connection pooling
-
-## S3 Validation Features
-
-The gateway includes comprehensive S3 RFC-compliant naming validation to prevent backend creation failures:
-
-### Bucket Name Validation
-- **Length**: 3-63 characters
-- **Characters**: Lowercase letters, numbers, periods, and hyphens only
-- **Format**: Must start and end with letter or number
-- **Restrictions**: 
-  - No consecutive periods (`..`)
-  - No period-hyphen combinations (`.-` or `-.`)
-  - No IP address format (`192.168.1.1`)
-  - No forbidden prefixes (`xn--`) or suffixes (`-s3alias`, `--ol-s3`)
-
-### Object Key Validation
-- **Length**: Maximum 1024 bytes when UTF-8 encoded
-- **Characters**: UTF-8 safe characters
-- **Strict Mode**: Optional filtering of problematic characters (`&`, `$`, `@`, etc.)
-- **Control Characters**: Rejected (except tab, newline, carriage return)
-
-### Validation Modes
-- **Standard Mode**: Warnings for problematic characters, errors for invalid ones
-- **Strict Mode**: Rejects all potentially problematic characters
-- **Regional Configuration**: Different regions can use different validation levels
-
-### Testing Validation
-
-```bash
-# Test bucket and object validation
-curl "http://localhost:8000/validation/test?bucket_name=test-bucket&object_key=file.txt"
-
-# Test invalid bucket name (will be rejected)
-curl -X PUT -H "X-Customer-ID: demo-customer" http://localhost:8000/s3/Invalid-Bucket-Name
-
-# Test valid bucket name (will be redirected)  
-curl -X PUT -H "X-Customer-ID: demo-customer" http://localhost:8000/s3/valid-bucket-name
-```
-
-## Bucket Hash Mapping
-
-The gateway solves S3's global namespace collision problem using deterministic hash mapping. Since S3 bucket names must be globally unique across all providers and customers, multiple customers cannot use the same logical bucket name. Our hash mapping creates unique backend bucket names while preserving customer-facing logical names.
+This ensures that authentication data never crosses jurisdictional boundaries and complies with GDPR data sovereignty requirements.
 
 ### How It Works
 
-1. **Customer Request**: Customer requests bucket `"my-data"`
-2. **Hash Generation**: System generates unique backend names:
-   - Spacetime: `s3gw-a1b2c3d4e5f6789a-spacetim`
-   - UpCloud: `s3gw-f9e8d7c6b5a43210-upcloud`
-   - Hetzner: `s3gw-1a2b3c4d5e6f7890-hetzner`
-3. **Database Storage**: Mapping stored in regional database
-4. **Backend Creation**: Real buckets created with hashed names
-5. **Customer Transparency**: Customer only sees `"my-data"`
+1. **Credential Creation**: Administrators create AWS-style access keys and secret keys for users
+2. **Request Routing**: Global gateway routes S3 requests to appropriate regional endpoint
+3. **Regional Authentication**: Regional gateway validates AWS SigV4 signatures against local credentials
+4. **Authorization**: System checks user permissions for the requested resource/action  
+5. **Audit Logging**: All authentication attempts and operations are logged regionally
 
-### Hash Algorithm
+### Authentication Flow
 
 ```
-Hash Input: customer_id:region_id:logical_name:backend_id:collision_counter
-Algorithm: SHA-256
-Format: s3gw-<16_chars_hash>-<backend_suffix>
+┌─────────────────┐     ┌─────────────────────┐     ┌─────────────────────┐
+│   S3 Client     │────▶│   Global Gateway    │────▶│  Regional Gateway   │
+│                 │     │                     │     │                     │
+│ Signs request   │     │ • Routes customer   │     │ • Authenticates     │
+│ with AWS SigV4  │     │ • NO authentication │     │ • Authorizes        │
+│                 │     │ • Minimal data      │     │ • Processes S3 ops  │
+│                 │     │ • HTTP 307 redirect │     │ • Local credentials │
+└─────────────────┘     └─────────────────────┘     └─────────────────────┘
+         │                                                     │
+         │                                                     │
+         └─────────────── Direct Redirect ────────────────────┘
+               (preserves authentication headers)
 ```
 
-### Benefits
+### Security Features
 
-- **Global Uniqueness**: No namespace collisions across customers or providers
-- **Multi-Backend Replication**: Different bucket names on each backend
-- **Customer Isolation**: Logical names remain private and collision-free
-- **Deterministic**: Same input always produces same output
-- **S3 Compliance**: Generated names follow S3 naming rules
-- **Collision Avoidance**: Counter incremented on rare hash collisions
+✅ **Industry Standard**: AWS SigV4 signature validation (same as real AWS S3)  
+✅ **GDPR Compliant**: Credentials stored only in regional databases  
+✅ **Data Sovereignty**: Authentication happens in the correct jurisdiction  
+✅ **Fine-Grained Permissions**: Resource-based access control per bucket/object  
+✅ **Credential Management**: Full lifecycle management of access keys  
+✅ **Audit Trail**: Comprehensive logging for compliance and security  
+✅ **Real-Time Authorization**: Dynamic permission checking on every request  
+✅ **Secure Storage**: Encrypted credential storage with activity tracking  
+✅ **Zero Global Auth Data**: No credentials or sensitive data in global database  
 
-### Example Mapping
+### Credential Management
+
+Credentials are managed through regional gateways only. Each regional gateway maintains its own set of user credentials.
+
+#### Creating Credentials
+
+```bash
+# Create new S3 credentials for a user (via regional endpoint)
+curl -X POST "http://localhost:8001/api/credentials/create" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_name": "John Doe",
+    "user_email": "john@company.com",
+    "permissions": {
+      "s3:GetObject": ["my-bucket", "shared-*"],
+      "s3:PutObject": ["my-bucket"],
+      "s3:ListBucket": ["my-bucket", "shared-*"],
+      "s3:CreateBucket": ["my-*"],
+      "s3:GetObjectTagging": ["*"],
+      "s3:PutObjectTagging": ["my-*"]
+    }
+  }'
+
+# Response includes access key and secret key
+{
+  "access_key_id": "AKIA1234567890EXAMPLE",
+  "secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLE",
+  "user_id": "user-abc123",
+  "user_name": "John Doe",
+  "permissions": {...},
+  "message": "Credentials created successfully"
+}
+```
+
+#### Permission System
+
+Permissions follow AWS S3 action patterns with resource matching:
 
 ```json
 {
-  "customer_id": "company-abc",
-  "logical_name": "backup-data",
-  "backend_mapping": {
-    "spacetime": "s3gw-7f3a2b1c9d8e6f45-spacetim",
-    "upcloud": "s3gw-8d9c2a1b3f4e5678-upcloud",
-    "hetzner": "s3gw-5e6f7a8b9c1d2345-hetzner"
+  "permissions": {
+    "s3:GetObject": ["bucket1", "bucket2/*", "shared-*"],
+    "s3:PutObject": ["my-bucket/*"],
+    "s3:DeleteObject": ["my-bucket/temp/*"],
+    "s3:ListBucket": ["*"],
+    "s3:CreateBucket": ["my-*", "test-*"],
+    "s3:*": ["admin-bucket"]
   }
 }
 ```
 
-### Testing Bucket Mapping
+**Resource Patterns**:
+- `bucket-name` - Exact bucket match
+- `prefix-*` - Wildcard matching
+- `*` - All resources
+- `bucket/path/*` - Path-based object matching
+
+#### Using with AWS CLI
 
 ```bash
-# Test mapping generation (no storage)
-curl -X POST "http://localhost:8000/api/bucket-mappings/test" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "customer_id": "test-customer",
-    "region_id": "FI-HEL",
-    "logical_name": "my-bucket"
-  }'
+# Configure AWS CLI with your credentials
+aws configure set aws_access_key_id AKIA1234567890EXAMPLE --profile myprofile
+aws configure set aws_secret_access_key wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLE --profile myprofile
+aws configure set default.region fi-hel --profile myprofile
 
-# List customer bucket mappings
-curl "http://localhost:8000/api/bucket-mappings/test-customer"
+# Use authenticated S3 operations
+aws s3 ls --endpoint-url http://localhost:8001 --profile myprofile
+aws s3 cp file.txt s3://my-bucket/ --endpoint-url http://localhost:8001 --profile myprofile
+aws s3api put-object-tagging --bucket my-bucket --key file.txt \
+  --tagging 'TagSet=[{Key=Environment,Value=prod}]' \
+  --endpoint-url http://localhost:8001 --profile myprofile
+```
 
-# Get specific bucket mapping
-curl "http://localhost:8000/api/bucket-mappings/test-customer/my-bucket"
+### API Endpoints
 
-# Create bucket with mapping
-curl -X PUT -H "X-Customer-ID: test-customer" \
-  "http://localhost:8000/s3/my-bucket"
+#### Credential Management
+- `POST /api/credentials/create` - Create new credentials
+- `GET  /api/credentials/list` - List all credentials  
+- `GET  /api/credentials/{access_key_id}` - Get credential info
+- `PUT  /api/credentials/{access_key_id}/permissions` - Update permissions
+- `DELETE /api/credentials/{access_key_id}` - Deactivate credentials
+- `POST /api/credentials/generate-demo` - Generate demo credentials
+- `GET  /api/credentials/user/{user_id}/buckets` - List user buckets
+
+#### All S3 Operations Require Authentication
+- `GET /s3` - List buckets (shows only user's buckets)
+- `PUT /s3/{bucket}` - Create bucket (requires CreateBucket permission)
+- `GET /s3/{bucket}` - List objects (requires ListBucket permission)
+- `GET /s3/{bucket}/{key}` - Get object (requires GetObject permission)
+- `PUT /s3/{bucket}/{key}` - Put object (requires PutObject permission)
+- `DELETE /s3/{bucket}/{key}` - Delete object (requires DeleteObject permission)
+- All tagging operations require corresponding tagging permissions
+
+### Authentication Flow
+
+```
+1. Client Request (with AWS SigV4 signature)
+   ↓
+2. Extract Authorization Header
+   ↓
+3. Parse Credential, SignedHeaders, Signature
+   ↓
+4. Lookup User Credentials in Database
+   ↓
+5. Calculate Expected Signature
+   ↓
+6. Compare Signatures
+   ↓
+7. Check User Permissions for Resource/Action
+   ↓
+8. Allow/Deny Request
+   ↓
+9. Log Authentication Result
+```
+
+### Bucket Ownership
+
+Buckets are automatically assigned to the user who creates them:
+
+```sql
+-- Buckets table includes owner tracking
+CREATE TABLE buckets (
+    bucket_name VARCHAR(255) NOT NULL,
+    owner_user_id VARCHAR(50), -- Links to s3_credentials.user_id
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    ...
+);
+
+-- Users can only see and manage their own buckets
+SELECT bucket_name FROM buckets WHERE owner_user_id = :user_id;
+```
+
+### Security Configuration
+
+Environment variables control authentication behavior:
+
+```bash
+# Enable/disable authentication (default: true)
+ENABLE_S3_AUTHENTICATION=true
+
+# Endpoints that bypass authentication (default: ["/health", "/api/credentials"])
+S3_AUTH_BYPASS_ENDPOINTS='["/health", "/api/credentials", "/validation"]'
+```
+
+### Demo and Testing
+
+Run the authentication demo to see the system in action:
+
+```bash
+# Run comprehensive authentication demo
+./demo-s3-authentication.sh
+```
+
+This demo shows:
+- Credential creation and management
+- Authenticated S3 operations with AWS CLI
+- Permission enforcement and authorization failures
+- Credential updates and deactivation
+- Audit logging and compliance features
+
+### Error Handling
+
+The system returns standard S3 error responses:
+
+```xml
+<!-- Missing authentication -->
+<Error>
+    <Code>MissingSecurityHeader</Code>
+    <Message>Missing Authorization header</Message>
+    <Resource>/bucket/object</Resource>
+    <RequestId>12345678-1234-1234-1234-123456789012</RequestId>
+</Error>
+
+<!-- Invalid credentials -->
+<Error>
+    <Code>InvalidAccessKeyId</Code>
+    <Message>Invalid access key</Message>
+    <Resource>/bucket/object</Resource>
+    <RequestId>12345678-1234-1234-1234-123456789012</RequestId>
+</Error>
+
+<!-- Permission denied -->
+<Error>
+    <Code>AccessDenied</Code>
+    <Message>Access denied for action s3:GetObject</Message>
+    <Resource>/bucket/object</Resource>
+    <RequestId>12345678-1234-1234-1234-123456789012</RequestId>
+</Error>
 ```
 
 ### Database Schema
 
-Bucket mappings are stored in regional databases:
+Authentication data is stored securely:
 
 ```sql
--- Main bucket mapping table
-CREATE TABLE bucket_mappings (
-    customer_id VARCHAR(100) NOT NULL,
-    logical_name VARCHAR(63) NOT NULL,
-    backend_mapping JSONB NOT NULL,
-    region_id VARCHAR(50) NOT NULL,
-    status VARCHAR(20) DEFAULT 'active',
+-- S3 credentials with permissions
+CREATE TABLE s3_credentials (
+    access_key_id VARCHAR(20) UNIQUE NOT NULL,
+    secret_access_key VARCHAR(40) NOT NULL,
+    user_id VARCHAR(50) UNIQUE NOT NULL,
+    user_name VARCHAR(100) NOT NULL,
+    permissions JSONB NOT NULL DEFAULT '{}',
+    is_active BOOLEAN DEFAULT true,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(customer_id, logical_name)
+    last_used_at TIMESTAMP
 );
 
--- Individual backend mappings for queries
-CREATE TABLE backend_bucket_names (
-    customer_id VARCHAR(100) NOT NULL,
-    logical_name VARCHAR(63) NOT NULL,
-    backend_id VARCHAR(50) NOT NULL,
-    backend_name VARCHAR(63) NOT NULL,
-    region_id VARCHAR(50) NOT NULL,
-    UNIQUE(customer_id, logical_name, backend_id),
-    UNIQUE(backend_id, backend_name)  -- Global uniqueness per backend
+-- Authentication audit log
+CREATE TABLE s3_auth_log (
+    access_key_id VARCHAR(20),
+    request_method VARCHAR(10),
+    request_path VARCHAR(1024),
+    auth_status VARCHAR(20), -- success, failed, access_denied
+    error_message TEXT,
+    source_ip INET,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
-```
-
-### Multi-Customer Example
-
-Three customers can all use logical name "data-backup":
-
-| Customer | Logical Name | Spacetime Backend | UpCloud Backend |
-|----------|-------------|-------------------|-----------------|
-| customer-1 | data-backup | s3gw-a1b2c3d4e5f6-spacetim | s3gw-f1e2d3c4b5a6-upcloud |
-| customer-2 | data-backup | s3gw-b2c3d4e5f6a1-spacetim | s3gw-e2f3d4c5b6a1-upcloud |
-| customer-3 | data-backup | s3gw-c3d4e5f6a1b2-spacetim | s3gw-d3e4f5c6a1b2-upcloud |
-
-All backend names are globally unique while customers use identical logical names.
-
-## S3 Tagging and Replication Management
-
-The gateway supports full S3-compatible tagging with automatic replica count management through background queues. This enables non-blocking replication operations triggered by tag changes, including **efficient deletion when replica count is reduced**.
-
-### How It Works
-
-1. **S3-Compatible Tagging**: Standard S3 tagging API endpoints with XML payloads
-2. **Tag-Based Replica Count**: Set `replica-count` tag to trigger replication changes
-3. **Background Processing**: Replication jobs queued and processed by worker threads
-4. **LocationConstraint Integration**: Respects allowed regions and priority order
-5. **Non-Blocking Operations**: Tag operations return immediately, replication happens async
-6. **Smart Deletion**: Efficient bulk deletion when replica count is reduced
-
-### Deletion Capabilities
-
-When replica count is reduced, the system provides comprehensive deletion:
-
-✅ **Individual Object Deletion**: Removes specific objects from unused zones  
-✅ **Bulk Bucket Deletion**: Deletes entire bucket replicas for cost optimization  
-✅ **Backend Bucket Cleanup**: Removes empty backend buckets completely  
-✅ **Database Metadata Updates**: Keeps metadata consistent with actual data  
-✅ **Primary Region Protection**: Always preserves primary region data  
-✅ **Smart Operation Selection**: Automatically chooses bulk vs individual operations  
-
-### Tag-Based Replica Management
-
-```bash
-# Set replica count via object tags
-curl -X PUT "http://localhost:8001/s3/my-bucket/my-file.txt?tagging" \
-  -H "X-Customer-ID: demo-customer" \
-  -H "Content-Type: application/xml" \
-  -d '<Tagging>
-    <TagSet>
-      <Tag>
-        <Key>replica-count</Key>
-        <Value>3</Value>
-      </Tag>
-      <Tag>
-        <Key>Environment</Key>
-        <Value>production</Value>
-      </Tag>
-    </TagSet>
-  </Tagging>'
-
-# Reduce replica count (triggers efficient deletion)
-curl -X PUT "http://localhost:8001/s3/my-bucket/my-file.txt?tagging" \
-  -H "X-Customer-ID: demo-customer" \
-  -H "Content-Type: application/xml" \
-  -d '<Tagging>
-    <TagSet>
-      <Tag>
-        <Key>replica-count</Key>
-        <Value>1</Value>
-      </Tag>
-      <Tag>
-        <Key>cost-optimization</Key>
-        <Value>enabled</Value>
-      </Tag>
-    </TagSet>
-  </Tagging>'
-
-# Set replica count via bucket tags (affects all objects)
-curl -X PUT "http://localhost:8001/s3/my-bucket?tagging" \
-  -H "X-Customer-ID: demo-customer" \
-  -H "Content-Type: application/xml" \
-  -d '<Tagging>
-    <TagSet>
-      <Tag>
-        <Key>replica-count</Key>
-        <Value>2</Value>
-      </Tag>
-    </TagSet>
-  </Tagging>'
-```
-
-### Replication Logic
-
-Based on LocationConstraint and replica count:
-
-```python
-# Example LocationConstraint: "fi,de,fr"
-regions = ['fi', 'de', 'fr']  # parsed from LocationConstraint
-replica_count = 2             # from replica-count tag
-
-# Active regions = first N regions
-active_regions = regions[:replica_count]  # ['fi', 'de']
-primary_region = regions[0]               # 'fi'
-```
-
-**Adding Replicas**: When `replica_count` increases:
-- Add next region from allowed list
-- Queue background job to copy data
-- Update metadata when complete
-
-**Removing Replicas**: When `replica_count` decreases:
-- Remove last region from active list
-- Queue background job to delete data (individual objects OR entire bucket)
-- Always preserve primary region
-- Clean up empty backend buckets
-
-### Deletion Job Types
-
-The system supports multiple deletion strategies:
-
-1. **Individual Object Removal** (`REMOVE_REPLICA`):
-   - Deletes specific objects from target zones
-   - Used for small-scale operations
-   - Preserves other objects in the bucket
-
-2. **Bulk Bucket Deletion** (`DELETE_BUCKET_REPLICA`):
-   - Deletes ALL objects from a bucket in target zone
-   - Automatically used for buckets with many objects (>10)
-   - Optionally deletes the empty backend bucket
-
-3. **Empty Bucket Cleanup** (`CLEANUP_EMPTY_BUCKET`):
-   - Removes completely empty backend buckets
-   - Prevents storage costs for unused buckets
-   - Updates database mapping status
-
-### Smart Operation Selection
-
-The system automatically chooses the most efficient approach:
-
-```python
-object_count = get_object_count_in_bucket(customer_id, bucket_name)
-
-if object_count > 10:
-    # Use bulk bucket deletion for efficiency
-    schedule_bucket_replica_deletion(customer_id, bucket_name, zone)
-else:
-    # Use individual object deletion for precision
-    for object_key in objects:
-        schedule_replica_removal(customer_id, bucket_name, object_key, zone)
-```
-
-### Deletion Safety Features
-
-- **Primary Region Protection**: Never deletes from the first region in LocationConstraint
-- **Validation**: Ensures replica count doesn't go below 1
-- **Atomic Operations**: Database updates only after successful deletion
-- **Error Handling**: Failed deletions don't affect successful ones
-- **Retry Logic**: Failed jobs automatically retried with exponential backoff
-
-### Supported Tag Names
-
-The system recognizes multiple tag names for replica count:
-- `replica-count` (recommended)
-- `replica_count`
-- `replication-count`
-- `replication_count`
-- `replicas`
-- `x-replica-count`
-
-### Replication Queue System
-
-#### Features
-- **Thread-Safe**: Multiple worker threads process jobs concurrently
-- **Priority-Based**: High-priority jobs (replica removal) processed first
-- **Retry Logic**: Failed jobs automatically retried with exponential backoff
-- **Job Tracking**: Monitor job status and completion
-- **Database Integration**: Metadata updated atomically
-- **Bulk Operations**: Efficient handling of large-scale deletions
-
-#### Queue Operations
-
-```bash
-# Check queue status
-curl "http://localhost:8001/api/replication/queue/status"
-
-# List active jobs
-curl "http://localhost:8001/api/replication/jobs/active"
-
-# Check specific job
-curl "http://localhost:8001/api/replication/jobs/{job_id}"
-
-# Cancel queued job
-curl -X DELETE "http://localhost:8001/api/replication/jobs/{job_id}"
-```
-
-#### Manual Job Scheduling
-
-```bash
-# Add replica manually
-curl -X POST "http://localhost:8001/api/replication/jobs/add-replica" \
-  -d "customer_id=demo-customer&bucket_name=my-bucket&object_key=file.txt&source_zone=fi-hel-st-1&target_zone=de-fra-st-1&priority=3"
-
-# Remove replica manually  
-curl -X POST "http://localhost:8001/api/replication/jobs/remove-replica" \
-  -d "customer_id=demo-customer&bucket_name=my-bucket&object_key=file.txt&target_zone=fr-par-st-1&priority=7"
-
-# Delete entire bucket replica (bulk operation)
-curl -X POST "http://localhost:8001/api/replication/jobs/delete-bucket-replica" \
-  -d "customer_id=demo-customer&bucket_name=my-bucket&target_zone=de-fra-st-1&priority=6"
-```
-
-### Integration Example
-
-Complete workflow combining LocationConstraint and tag-based replication with deletion:
-
-```bash
-# 1. Create bucket with LocationConstraint
-curl -X PUT "http://localhost:8000/s3/my-app-data" \
-  -H "X-Customer-ID: my-company" \
-  -H "Content-Type: application/xml" \
-  -d '<CreateBucketConfiguration>
-    <LocationConstraint>fi,de,fr</LocationConstraint>
-  </CreateBucketConfiguration>'
-
-# 2. Upload object (starts in primary region 'fi')
-curl -X PUT "http://localhost:8001/s3/my-app-data/user-profile.json" \
-  -H "X-Customer-ID: my-company" \
-  -H "Content-Type: application/json" \
-  -d '{"user_id": 12345, "name": "John Doe"}'
-
-# 3. Set tags to replicate to 3 regions
-curl -X PUT "http://localhost:8001/s3/my-app-data/user-profile.json?tagging" \
-  -H "X-Customer-ID: my-company" \
-  -H "Content-Type: application/xml" \
-  -d '<Tagging>
-    <TagSet>
-      <Tag>
-        <Key>replica-count</Key>
-        <Value>3</Value>
-      </Tag>
-      <Tag>
-        <Key>data-classification</Key>
-        <Value>sensitive</Value>
-      </Tag>
-    </TagSet>
-  </Tagging>'
-
-# 4. Check replication job status
-curl "http://localhost:8001/api/replication/jobs/active"
-
-# 5. Later: reduce replicas to save costs (triggers deletion)
-curl -X PUT "http://localhost:8001/s3/my-app-data/user-profile.json?tagging" \
-  -H "X-Customer-ID: my-company" \
-  -H "Content-Type: application/xml" \
-  -d '<Tagging>
-    <TagSet>
-      <Tag>
-        <Key>replica-count</Key>
-        <Value>1</Value>
-      </Tag>
-      <Tag>
-        <Key>cost-optimization</Key>
-        <Value>enabled</Value>
-      </Tag>
-    </TagSet>
-  </Tagging>'
-
-# 6. Monitor deletion progress
-curl "http://localhost:8001/api/replication/jobs/active"
-```
-
-### Cost Optimization Use Cases
-
-**Scale Down for Cost Savings**:
-```bash
-# Reduce from 3 replicas to 1 (66% cost reduction)
-# Deletes data from 'de' and 'fr', keeps 'fi'
-replica-count: 3 → 1
-```
-
-**Temporary Scale Up**:
-```bash
-# Scale up for high availability during critical periods
-replica-count: 1 → 3
-
-# Scale back down after critical period
-replica-count: 3 → 1
-```
-
-**Regional Compliance**:
-```bash
-# Move from multi-region to single region for compliance
-LocationConstraint: "fi,de,fr" + replica-count: 3 → replica-count: 1
-# Ensures data stays only in Finland
 ```
 
 ### Benefits
 
-✅ **Non-Blocking**: Tag operations return immediately  
-✅ **S3-Compatible**: Standard tagging API works with existing tools  
-✅ **Automatic Replication**: Tag changes trigger background replication  
-✅ **Efficient Deletion**: Bulk deletion for cost optimization  
-✅ **Cost Control**: Reduce replicas by changing tags  
-✅ **Compliance**: Respects LocationConstraint and data sovereignty  
-✅ **Monitoring**: Full visibility into replication jobs  
-✅ **Fault Tolerant**: Retry logic and error handling  
-✅ **Scalable**: Multi-threaded processing with priority queues  
-✅ **Smart Operations**: Automatic bulk vs individual operation selection  
-✅ **Complete Cleanup**: Removes data AND backend infrastructure  
+🔐 **Enterprise Security**: AWS-compatible authentication that works with existing tools  
+🔐 **Compliance Ready**: Comprehensive audit logs for security compliance  
+🔐 **Flexible Permissions**: Fine-grained control over who can access what  
+🔐 **Zero Trust**: Every request authenticated and authorized  
+🔐 **Credential Management**: Full lifecycle management with secure storage  
+🔐 **Real-time Control**: Immediate credential deactivation and permission updates  
 
-### Error Handling
-
-The system provides robust error handling:
-
-- **Tag Validation**: S3-compliant tag validation (keys ≤ 128 chars, values ≤ 256 chars)
-- **Constraint Validation**: Replica count cannot exceed allowed regions
-- **Job Retry**: Failed replication/deletion jobs automatically retried
-- **Partial Failures**: Some replicas may succeed while others fail
-- **Status Tracking**: Detailed job status and error messages
-- **Deletion Safety**: Primary region always preserved
-- **Backend Cleanup**: Empty buckets properly removed
+The authentication system ensures that your S3 gateway is production-ready with enterprise-grade security that's fully compatible with existing AWS S3 tools and workflows.
 
 ## LocationConstraint
 
@@ -1054,13 +529,98 @@ You now have a complete S3 gateway with:
 ✅ **Flexible region/zone targeting** - fi, fi-hel, fi-hel-st-1 syntax
 ✅ **Dynamic replica management** - Adjust replica_count via API or tags
 ✅ **Comprehensive validation** - Bucket names and object keys
-✅ **Simple scripts** - `./start.sh` and `./test.sh` for easy operation
-✅ **Single docker-compose.yml** - Simple deployment and management
+✅ **S3 Authentication & Authorization** - AWS SigV4 with GDPR-compliant architecture
+✅ **Production-ready security** - Enterprise-grade authentication system
 
-Start testing with:
+### Quick Start
+
 ```bash
+# Start all services and explore features
+./run.sh start
+./run.sh
+
+# Or test everything quickly
+./run.sh quick
+```
+
+### Key Features Demo
+
+```bash
+./run.sh auth        # AWS SigV4 authentication with credential management
+./run.sh mapping     # Bucket hash mapping solves namespace collisions  
+./run.sh tagging     # S3 tagging with background replication
+./run.sh gdpr        # GDPR-compliant architecture demonstration
+./run.sh test        # Comprehensive validation and compliance tests
+```
+
+### Manual Commands (Alternative)
+
+If you prefer individual scripts:
+
+```bash
+# Start services
 ./start.sh
+
+# Run comprehensive tests
 ./test.sh
+
+# Authentication demo
+./demo-s3-authentication.sh
+
+# Bucket mapping demo
+./demo-bucket-mapping.sh
+
+# Tagging and replication demo
+./demo-tagging-replication.sh
+```
+
+## Unified Launcher Commands
+
+The `./run.sh` script provides organized access to all functionality:
+
+### 🏗️ Setup & Management
+```bash
+./run.sh start      # Start all services
+./run.sh stop       # Stop all services  
+./run.sh restart    # Restart with fresh data
+./run.sh status     # Check service health
+./run.sh logs       # View service logs
+```
+
+### 🧪 Testing & Validation
+```bash
+./run.sh test       # Comprehensive test suite
+./run.sh quick      # Quick smoke test
+```
+
+### 🔐 Authentication & Security  
+```bash
+./run.sh auth       # Full AWS SigV4 authentication demo
+./run.sh auth-arch  # Test GDPR-compliant auth architecture
+```
+
+### 🗺️ Bucket Mapping & Location
+```bash
+./run.sh mapping    # Bucket hash mapping demo
+./run.sh location   # LocationConstraint features
+```
+
+### 🏷️ Tagging & Replication
+```bash
+./run.sh tagging    # S3 tagging with replication demo
+./run.sh replica    # Replication management demo
+```
+
+### ⚖️ GDPR Compliance
+```bash
+./run.sh gdpr       # GDPR compliance demonstration
+./run.sh privacy    # Data sovereignty verification
+```
+
+### 📚 Documentation
+```bash
+./run.sh features   # List all S3 gateway features
+./run.sh help       # Detailed help for all commands
 ```
 
 ## Workflow
