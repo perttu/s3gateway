@@ -1,10 +1,10 @@
 version: '3.8'
 
 services:
-  # Global Database - Provider registry and routing information
+  # GDPR-Compliant Global Database - Provider registry and routing information ONLY
   postgres-global:
     image: postgres:15
-    container_name: s3gateway_postgres_global
+    container_name: s3gateway_postgres_global_gdpr
     environment:
       POSTGRES_DB: s3gateway_global
       POSTGRES_USER: s3gateway
@@ -13,7 +13,7 @@ services:
       - "5432:5432"  # Global database port
     volumes:
       - postgres_global_data:/var/lib/postgresql/data
-      - ./code/gateway/schema_global.sql:/docker-entrypoint-initdb.d/schema_global.sql
+      - ./code/gateway/schema_global_gdpr.sql:/docker-entrypoint-initdb.d/schema_global_gdpr.sql
     networks:
       - s3gateway_network
     healthcheck:
@@ -25,7 +25,7 @@ services:
   # Regional Database - FI-HEL region (customer object metadata)
   postgres-fi-hel:
     image: postgres:15
-    container_name: s3gateway_postgres_fi_hel
+    container_name: s3gateway_postgres_fi_hel_gdpr
     environment:
       POSTGRES_DB: s3gateway_regional
       POSTGRES_USER: s3gateway
@@ -46,7 +46,7 @@ services:
   # Regional Database - DE-FRA region (for future expansion)
   postgres-de-fra:
     image: postgres:15
-    container_name: s3gateway_postgres_de_fra
+    container_name: s3gateway_postgres_de_fra_gdpr
     environment:
       POSTGRES_DB: s3gateway_regional
       POSTGRES_USER: s3gateway
@@ -67,7 +67,7 @@ services:
   # S3Proxy (for fallback/testing)
   s3proxy:
     build: ./docker/s3proxy
-    container_name: s3gateway_s3proxy
+    container_name: s3gateway_s3proxy_gdpr
     ports:
       - "8080:8080"
     volumes:
@@ -80,19 +80,20 @@ services:
       timeout: 10s
       retries: 3
 
-  # Global Gateway - Handles routing and provider management
+  # GDPR-Compliant Global Gateway - Uses HTTP redirects instead of proxying
   gateway-global:
     build:
       context: ./docker/gateway
       dockerfile: Dockerfile
-    container_name: s3gateway_global
+    container_name: s3gateway_global_gdpr
     environment:
       DATABASE_URL: postgresql://s3gateway:s3gateway_pass@postgres-global:5432/s3gateway_global
       GATEWAY_TYPE: global
-      REGIONAL_ENDPOINTS: '{"FI-HEL": "http://gateway-fi-hel:8000", "DE-FRA": "http://gateway-de-fra:8000"}'
+      REGIONAL_ENDPOINTS: '{"FI-HEL": "http://localhost:8001", "DE-FRA": "http://localhost:8002"}'
+      ENABLE_GDPR_REDIRECTS: "true"  # Enable GDPR-compliant redirects
       S3PROXY_URL: http://s3proxy:8080
     volumes:
-      - ./code/gateway/main_two_layer.py:/app/main.py
+      - ./code/gateway/main_gdpr_compliant.py:/app/main.py
       - ./providers_flat.csv:/app/providers_flat.csv
     ports:
       - "8000:8000"  # Global endpoint
@@ -107,12 +108,12 @@ services:
       timeout: 10s
       retries: 3
 
-  # Regional Gateway - FI-HEL region
+  # Regional Gateway - FI-HEL region (GDPR-compliant)
   gateway-fi-hel:
     build:
       context: ./docker/gateway
       dockerfile: Dockerfile
-    container_name: s3gateway_fi_hel
+    container_name: s3gateway_fi_hel_gdpr
     environment:
       DATABASE_URL: postgresql://s3gateway:s3gateway_pass@postgres-fi-hel:5432/s3gateway_regional
       GLOBAL_DATABASE_URL: postgresql://s3gateway:s3gateway_pass@postgres-global:5432/s3gateway_global
@@ -122,7 +123,7 @@ services:
       PROVIDERS_FILE: /app/providers_flat.csv
       S3PROXY_URL: http://s3proxy:8080
     volumes:
-      - ./code/gateway/main_two_layer.py:/app/main.py
+      - ./code/gateway/main_gdpr_compliant.py:/app/main.py
       - ./providers_flat.csv:/app/providers_flat.csv
       - ./config/s3_backends.json:/app/config/s3_backends_fi_hel.json
     ports:
@@ -140,12 +141,12 @@ services:
       timeout: 10s
       retries: 3
 
-  # Regional Gateway - DE-FRA region (for future expansion)
+  # Regional Gateway - DE-FRA region (GDPR-compliant)
   gateway-de-fra:
     build:
       context: ./docker/gateway
       dockerfile: Dockerfile
-    container_name: s3gateway_de_fra
+    container_name: s3gateway_de_fra_gdpr
     environment:
       DATABASE_URL: postgresql://s3gateway:s3gateway_pass@postgres-de-fra:5432/s3gateway_regional
       GLOBAL_DATABASE_URL: postgresql://s3gateway:s3gateway_pass@postgres-global:5432/s3gateway_global
@@ -155,7 +156,7 @@ services:
       PROVIDERS_FILE: /app/providers_flat.csv
       S3PROXY_URL: http://s3proxy:8080
     volumes:
-      - ./code/gateway/main_two_layer.py:/app/main.py
+      - ./code/gateway/main_gdpr_compliant.py:/app/main.py
       - ./providers_flat.csv:/app/providers_flat.csv
       - ./config/s3_backends.json:/app/config/s3_backends_de_fra.json
     ports:
@@ -183,28 +184,39 @@ networks:
   s3gateway_network:
     driver: bridge
 
-# Usage Instructions:
+# GDPR Compliance Features:
 #
-# 1. Start all services:
-#    docker-compose -f docker-compose.two-layer.yml up -d
+# 1. HTTP Redirects Instead of Proxying:
+#    - Customer data goes directly to regional endpoints
+#    - Global gateway never sees customer requests/responses
+#    - No "man in the middle" GDPR violations
 #
-# 2. Global endpoint (routes to regional endpoints):
-#    http://localhost:8000
+# 2. Minimal Global Logging:
+#    - NO IP addresses stored globally
+#    - NO user agents or request details
+#    - Only customer ID and routing decisions
 #
-# 3. Regional endpoints (direct access):
-#    FI-HEL: http://localhost:8001
-#    DE-FRA: http://localhost:8002
+# 3. Regional Data Sovereignty:
+#    - Finnish customer data stays in FI-HEL
+#    - German customer data stays in DE-FRA
+#    - Complete isolation of customer personal data
 #
-# 4. Test routing:
-#    # Global endpoint determines region based on customer_id
-#    curl -H "X-Customer-ID: demo-customer" http://localhost:8000/s3/bucket/object
-#    
-#    # Direct regional access
-#    curl http://localhost:8001/s3/bucket/object
+# 4. Audit Trail Compliance:
+#    - Full audit trails in regional databases
+#    - Minimal operational logs globally
+#    - GDPR-compliant data retention
 #
-# 5. Check databases:
-#    # Global database
-#    docker exec -it s3gateway_postgres_global psql -U s3gateway -d s3gateway_global
-#    
-#    # Regional database (FI-HEL)
-#    docker exec -it s3gateway_postgres_fi_hel psql -U s3gateway -d s3gateway_regional 
+# Usage Examples:
+#
+# 1. Customer makes request to global endpoint:
+#    curl -H "X-Customer-ID: finnish-customer" http://localhost:8000/s3/bucket
+#    → Gets HTTP 307 redirect to http://localhost:8001/s3/bucket
+#    → Browser/client follows redirect directly to FI-HEL region
+#
+# 2. Check GDPR compliance:
+#    curl http://localhost:8000/compliance/audit  # Global minimal data
+#    curl http://localhost:8001/api/compliance/audit  # Regional full data
+#
+# 3. Verify redirect behavior:
+#    curl -v -H "X-Customer-ID: test-customer" http://localhost:8000/s3/test
+#    # Should return HTTP 307 with Location header pointing to regional endpoint 
