@@ -8,6 +8,7 @@ A dockerized S3-compatible gateway service with real S3 backend integration, dat
 - **S3-Compatible API**: Full S3 operations (GET, PUT, DELETE, LIST) with `/s3/` prefix
 - **S3 RFC-Compliant Validation**: Validates bucket names and object keys to prevent backend failures
 - **Bucket Hash Mapping**: Solves S3 global namespace collisions with deterministic hashing
+- **LocationConstraint Support**: S3-compatible location specification with cross-border control
 - **GDPR-Compliant Architecture**: Two-layer design with HTTP redirects for data sovereignty
 - **Data Sovereignty**: Provider selection based on country/region requirements
 - **Versioning & Immutability**: Object versioning with immutable storage support
@@ -130,6 +131,12 @@ docker-compose logs -f
 - `GET /api/bucket-mappings/{customer_id}` - List customer bucket mappings
 - `GET /api/bucket-mappings/{customer_id}/{logical_name}` - Get specific bucket mapping
 - `POST /api/bucket-mappings/test` - Test bucket mapping generation
+
+### LocationConstraint API
+- `GET /api/location-constraints/{customer_id}/{logical_name}` - Get bucket location policy
+- `PUT /api/location-constraints/{customer_id}/{logical_name}/replica-count` - Update replica count
+- `POST /api/location-constraints/test` - Test location constraint parsing
+- `GET /api/location-constraints/available-locations` - List available regions and zones
 
 ## Configuration
 
@@ -530,6 +537,148 @@ Three customers can all use logical name "data-backup":
 
 All backend names are globally unique while customers use identical logical names.
 
+## LocationConstraint
+
+The gateway supports S3-compatible LocationConstraint with advanced multi-location capabilities. Unlike standard S3 which only supports single regions, our implementation allows comma-separated regions/zones with sophisticated replication control.
+
+### How It Works
+
+1. **Bucket Creation**: Customer specifies LocationConstraint during bucket creation
+2. **Location Parsing**: System parses comma-separated locations (regions or zones)
+3. **Primary Placement**: Bucket created in first specified location (primary)
+4. **Replication Control**: Additional locations define replication possibilities
+5. **Cross-Border Policy**: Replication across countries only if multiple countries specified
+
+### LocationConstraint Syntax
+
+```
+LocationConstraint: comma-separated list of regions/zones
+Examples:
+- "fi"                      # Single region (Finland)
+- "fi,de"                   # Cross-border (Finland + Germany)
+- "fi-hel-st-1"            # Specific zone
+- "fi,de,fr"               # Multi-country replication
+- "fi-hel-st-1,de-fra-uc-1" # Specific zones
+```
+
+### Order-Based Priority
+
+The order matters:
+1. **First location = Primary**: Bucket initially created here
+2. **Additional locations = Replication targets**: Used when replica_count > 1
+3. **Cross-border control**: Multiple countries enable cross-border replication
+
+### Location Types
+
+**Regions** (resolve to first available zone):
+- `fi` → `fi-hel-st-1` (Finland region → Helsinki Spacetime zone)
+- `de` → `de-fra-st-1` (Germany region → Frankfurt Spacetime zone)
+- `fr` → `fr-par-st-1` (France region → Paris Spacetime zone)
+
+**Specific Zones**:
+- `fi-hel-st-1` (Helsinki Spacetime)
+- `fi-hel-uc-1` (Helsinki UpCloud)
+- `de-fra-hz-1` (Frankfurt Hetzner)
+
+### Replication Control
+
+**Default Behavior**: Only primary location used (replica_count = 1)
+
+**Increasing Replicas**: Set replica_count via API or tags
+```bash
+# Increase to 2 replicas (uses first 2 locations)
+curl -X PUT "http://localhost:8000/api/location-constraints/customer/bucket/replica-count" \
+  -d '{"replica_count": 2}'
+```
+
+**Replica Placement Logic**:
+```
+LocationConstraint: "fi,de,fr"
+replica_count: 1 → ["fi-hel-st-1"]                    # Primary only
+replica_count: 2 → ["fi-hel-st-1", "de-fra-st-1"]    # Primary + first additional
+replica_count: 3 → ["fi-hel-st-1", "de-fra-st-1", "fr-par-st-1"]  # All specified
+```
+
+### Cross-Border Replication
+
+**Single Country**: `"fi"` or `"fi,fi-hel"` → No cross-border replication allowed
+**Multi-Country**: `"fi,de"` → Cross-border replication enabled between Finland and Germany
+
+This enforces data sovereignty by default while allowing explicit cross-border replication when needed.
+
+### Examples
+
+#### Basic Usage
+
+```bash
+# Create bucket in Finland only
+curl -X PUT -H "X-Customer-ID: company" \
+  -d '<CreateBucketConfiguration><LocationConstraint>fi</LocationConstraint></CreateBucketConfiguration>' \
+  "http://localhost:8000/s3/my-bucket"
+
+# Create with cross-border replication allowed
+curl -X PUT -H "X-Customer-ID: company" \
+  -d '<CreateBucketConfiguration><LocationConstraint>fi,de</LocationConstraint></CreateBucketConfiguration>' \
+  "http://localhost:8000/s3/eu-bucket"
+
+# Create in specific zone
+curl -X PUT -H "X-Customer-ID: company" \
+  -d '<CreateBucketConfiguration><LocationConstraint>fi-hel-st-1</LocationConstraint></CreateBucketConfiguration>' \
+  "http://localhost:8000/s3/zone-specific"
+```
+
+#### Advanced Scenarios
+
+**Compliance Scenario**: Company must keep data in Finland but wants option for EU expansion
+```
+LocationConstraint: "fi,de,fr"
+replica_count: 1           # Starts in Finland only
+                          # Can expand to Germany/France later
+```
+
+**Performance Scenario**: Multi-region application with specific zone requirements
+```
+LocationConstraint: "fi-hel-st-1,de-fra-uc-1,fr-par-hz-1"
+replica_count: 3           # Data in all three zones
+                          # Optimized for specific provider capabilities
+```
+
+**Cost Optimization**: Primary in cheaper region, replica in premium region
+```
+LocationConstraint: "de,fi"
+replica_count: 1           # Starts in Germany (primary)
+                          # Can add Finland replica if needed
+```
+
+### API Management
+
+```bash
+# Test location constraint parsing
+curl -X POST "http://localhost:8000/api/location-constraints/test" \
+  -d '{"location_constraint": "fi,de", "replica_count": 2}'
+
+# Get bucket location policy
+curl "http://localhost:8000/api/location-constraints/customer/bucket"
+
+# Update replica count (triggers replication)
+curl -X PUT "http://localhost:8000/api/location-constraints/customer/bucket/replica-count" \
+  -d '{"replica_count": 3}'
+
+# List available locations
+curl "http://localhost:8000/api/location-constraints/available-locations"
+```
+
+### Benefits
+
+✅ **S3 Compatibility**: Standard LocationConstraint syntax  
+✅ **Multi-Location Support**: Comma-separated regions/zones  
+✅ **Order-Based Priority**: Predictable placement logic  
+✅ **Cross-Border Control**: Automatic sovereignty enforcement  
+✅ **Flexible Targeting**: Region or zone-level precision  
+✅ **Dynamic Replication**: Adjust replica_count without recreating bucket  
+✅ **Cost Optimization**: Choose regions/zones based on requirements  
+✅ **Compliance Support**: Keep data in specific jurisdictions  
+
 ## Development
 
 ### Adding New S3 Backends
@@ -570,10 +719,15 @@ You now have a complete S3 gateway with:
 
 ✅ **S3 RFC-compliant naming validation** - Prevents backend failures
 ✅ **Bucket hash mapping** - Solves S3 global namespace collisions
+✅ **LocationConstraint support** - S3-compatible multi-location control
 ✅ **GDPR-compliant two-layer architecture** - HTTP redirects for data sovereignty  
 ✅ **Multi-regional support** - FI-HEL and DE-FRA regions
 ✅ **Multi-backend replication** - Unique bucket names per backend
 ✅ **Customer isolation** - Deterministic hashing with collision avoidance
+✅ **Cross-border replication control** - Based on specified countries
+✅ **Order-based location priority** - First location = primary placement
+✅ **Flexible region/zone targeting** - fi, fi-hel, fi-hel-st-1 syntax
+✅ **Dynamic replica management** - Adjust replica_count via API
 ✅ **Comprehensive validation** - Bucket names and object keys
 ✅ **Simple scripts** - `./start.sh` and `./test.sh` for easy operation
 ✅ **Single docker-compose.yml** - Simple deployment and management

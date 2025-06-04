@@ -24,10 +24,11 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 
 # Import our S3 validation module
-from s3_validation import S3NameValidator, S3ValidationError, validate_s3_name
+from s3_validation import S3NameValidator, S3ValidationError, validate_s3_name, S3Validator, S3ValidationResult
 
 # Import bucket mapping modules
 from bucket_mapping import BucketMapper, BucketMappingService, create_bucket_with_mapping
+from location_constraint import LocationConstraintParser, LocationConstraintManager, Location
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -796,40 +797,278 @@ async def test_bucket_mapping(
         logger.error(f"Failed to test bucket mapping: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# LocationConstraint management endpoints
+@app.get("/api/location-constraints/{customer_id}/{logical_name}")
+async def get_bucket_location_constraint(customer_id: str, logical_name: str):
+    """Get location constraint and replication policy for a bucket"""
+    try:
+        with get_db() as session:
+            location_manager = LocationConstraintManager(session)
+            policy = location_manager.get_location_constraint(customer_id, logical_name)
+            
+            if not policy:
+                raise HTTPException(status_code=404, detail="Location constraint not found")
+            
+            return {
+                "customer_id": customer_id,
+                "logical_name": logical_name,
+                "location_policy": policy,
+                "summary": {
+                    "primary_location": policy.get('primary_location'),
+                    "primary_zone": policy.get('primary_zone'),
+                    "replica_count": policy.get('replica_count'),
+                    "allowed_locations": policy.get('location_constraint', []),
+                    "cross_border_replication": policy.get('cross_border_replication', False),
+                    "allowed_countries": policy.get('allowed_countries', [])
+                }
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get location constraint: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/location-constraints/{customer_id}/{logical_name}/replica-count")
+async def update_replica_count(
+    customer_id: str, 
+    logical_name: str,
+    request: Request
+):
+    """Update replica count for a bucket (triggers replication changes)"""
+    try:
+        body = await request.json()
+        new_replica_count = body.get('replica_count')
+        
+        if not isinstance(new_replica_count, int) or new_replica_count < 1:
+            raise HTTPException(status_code=400, detail="replica_count must be a positive integer")
+        
+        with get_db() as session:
+            location_manager = LocationConstraintManager(session)
+            
+            # Get current policy
+            current_policy = location_manager.get_location_constraint(customer_id, logical_name)
+            if not current_policy:
+                raise HTTPException(status_code=404, detail="Location constraint not found")
+            
+            # Update replica count
+            success = location_manager.update_replica_count(customer_id, logical_name, new_replica_count)
+            
+            if not success:
+                raise HTTPException(status_code=500, detail="Failed to update replica count")
+            
+            # Get updated policy
+            updated_policy = location_manager.get_location_constraint(customer_id, logical_name)
+            
+            return {
+                "message": f"Replica count updated to {new_replica_count}",
+                "customer_id": customer_id,
+                "logical_name": logical_name,
+                "previous_replica_count": current_policy.get('replica_count'),
+                "new_replica_count": new_replica_count,
+                "updated_policy": updated_policy,
+                "replication_zones": updated_policy.get('replication_zones', []),
+                "note": "Actual replication will be triggered by background jobs"
+            }
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update replica count: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/location-constraints/test")
+async def test_location_constraint(
+    location_constraint: str = "fi,de",
+    replica_count: int = 2
+):
+    """Test location constraint parsing without storing in database"""
+    try:
+        parser = LocationConstraintParser()
+        
+        # Parse constraint
+        success, locations, errors = parser.parse_location_constraint(location_constraint)
+        
+        if not success:
+            return {
+                "test": True,
+                "valid": False,
+                "constraint": location_constraint,
+                "errors": errors
+            }
+        
+        # Generate policy
+        policy = parser.create_location_policy(locations, replica_count)
+        
+        return {
+            "test": True,
+            "valid": True,
+            "constraint": location_constraint,
+            "replica_count": replica_count,
+            "parsed_locations": [
+                {
+                    "name": loc.name,
+                    "type": loc.type.value,
+                    "country": loc.country,
+                    "region": loc.region,
+                    "resolved_zone": parser.resolve_location_to_zone(loc)
+                }
+                for loc in locations
+            ],
+            "policy": policy,
+            "explanation": {
+                "primary_location": policy['primary_location'],
+                "cross_border_allowed": policy['cross_border_replication'],
+                "countries_involved": policy['allowed_countries'],
+                "replication_zones": policy['replication_zones']
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to test location constraint: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/location-constraints/available-locations")
+async def list_available_locations():
+    """List all available locations (regions and zones)"""
+    try:
+        parser = LocationConstraintParser()
+        
+        locations_by_country = {}
+        for name, location in parser.available_locations.items():
+            country = location.country
+            if country not in locations_by_country:
+                locations_by_country[country] = {
+                    "regions": [],
+                    "zones": []
+                }
+            
+            location_info = {
+                "name": name,
+                "type": location.type.value,
+                "parent_region": location.region if location.type == LocationType.ZONE else None
+            }
+            
+            if location.type == LocationType.REGION:
+                location_info["available_zones"] = location.zones
+                locations_by_country[country]["regions"].append(location_info)
+            else:
+                locations_by_country[country]["zones"].append(location_info)
+        
+        return {
+            "available_locations": locations_by_country,
+            "usage": {
+                "single_region": "fi",
+                "cross_border": "fi,de",
+                "specific_zones": "fi-hel-st-1,de-fra-uc-1",
+                "mixed": "fi,de-fra-st-1,fr"
+            },
+            "notes": {
+                "order_matters": "First location is primary, others for replication",
+                "cross_border": "Multiple countries allow cross-border replication",
+                "zone_selection": "Regions resolve to first available zone"
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to list available locations: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 # Update bucket operations to use hash mapping
 @app.put("/s3/{bucket_name}")
-async def create_bucket_with_mapping(
+async def create_bucket_with_mapping_and_location(
     bucket_name: str,
     request: Request,
-    x_customer_id: Optional[str] = Header(None, alias="X-Customer-ID")
+    x_customer_id: Optional[str] = Header(None, alias="X-Customer-ID"),
+    x_amz_bucket_region: Optional[str] = Header(None, alias="X-Amz-Bucket-Region")
 ):
-    """Create bucket with hash mapping - validates logical name and creates backend mappings"""
+    """Create bucket with hash mapping and LocationConstraint support"""
     
     # Determine customer and region from headers or routing
     customer_id = x_customer_id or extract_customer_from_request(request)
     region_id = get_region_from_request(request)
     
+    # Get LocationConstraint from request body or headers
+    location_constraint = None
+    try:
+        body = await request.body()
+        if body:
+            # Try to parse XML body for LocationConstraint
+            body_str = body.decode('utf-8')
+            if 'LocationConstraint' in body_str:
+                import re
+                match = re.search(r'<LocationConstraint>([^<]+)</LocationConstraint>', body_str)
+                if match:
+                    location_constraint = match.group(1)
+        
+        # Fallback to header
+        if not location_constraint:
+            location_constraint = x_amz_bucket_region
+            
+        # If still no constraint, use empty string (will default to 'fi')
+        if not location_constraint:
+            location_constraint = ""
+            
+    except Exception as e:
+        logger.warning(f"Failed to parse LocationConstraint: {e}")
+        location_constraint = ""
+    
+    logger.info(f"Creating bucket {bucket_name} for {customer_id} with LocationConstraint: '{location_constraint}'")
+    
     # Validate logical bucket name first
     if ENABLE_S3_VALIDATION:
-        validator = S3Validator(strict_mode=S3_VALIDATION_STRICT)
-        validation_result = validator.validate_bucket_name(bucket_name)
-        
-        if not validation_result.is_valid:
-            # Return S3-compatible error
+        try:
+            validator = S3NameValidator()
+            bucket_valid, bucket_errors = validator.validate_bucket_name(bucket_name)
+            if not bucket_valid:
+                return create_s3_error_response(
+                    "InvalidBucketName",
+                    f"Invalid bucket name: {', '.join(bucket_errors)}",
+                    bucket_name
+                )
+        except Exception as e:
+            logger.error(f"Bucket validation error: {e}")
             return create_s3_error_response(
-                "InvalidBucketName",
-                f"Invalid bucket name: {', '.join(validation_result.errors)}",
+                "ValidationError",
+                "Bucket name validation failed",
                 bucket_name
             )
+    
+    # Parse LocationConstraint
+    location_parser = LocationConstraintParser()
+    success, locations, errors = location_parser.parse_location_constraint(location_constraint)
+    
+    if not success:
+        return create_s3_error_response(
+            "InvalidLocationConstraint",
+            f"Invalid LocationConstraint: {', '.join(errors)}",
+            bucket_name
+        )
+    
+    # Get primary location (first in list)
+    primary_location = location_parser.get_primary_location(locations)
+    primary_zone = location_parser.resolve_location_to_zone(primary_location)
+    
+    logger.info(f"Primary location: {primary_location.name} -> {primary_zone}")
+    logger.info(f"Allowed locations: {[loc.name for loc in locations]}")
+    logger.info(f"Cross-border replication: {location_parser.allows_cross_border_replication(locations)}")
     
     # For global gateway, redirect to regional endpoint after mapping
     if GATEWAY_TYPE == 'global':
         # Create bucket mapping first
         try:
             with get_db() as session:
-                backends = ["spacetime", "upcloud", "hetzner"]  # Get from config
+                # Get backends available in primary location
+                available_backends = get_backends_for_zone(primary_zone)
+                if not available_backends:
+                    return create_s3_error_response(
+                        "NoBackendsAvailable",
+                        f"No backends available in zone {primary_zone}",
+                        bucket_name
+                    )
+                
+                # Create bucket mapping with location-aware backend selection
                 success, mapping_info = create_bucket_with_mapping(
-                    customer_id, region_id, bucket_name, backends, session
+                    customer_id, primary_location.region, bucket_name, available_backends, session
                 )
                 
                 if not success:
@@ -839,8 +1078,18 @@ async def create_bucket_with_mapping(
                         bucket_name
                     )
                 
+                # Store location constraint
+                location_manager = LocationConstraintManager(session)
+                constraint_stored = location_manager.store_location_constraint(
+                    customer_id, bucket_name, locations, replica_count=1
+                )
+                
+                if not constraint_stored:
+                    logger.warning(f"Failed to store location constraint for {customer_id}:{bucket_name}")
+                
                 logger.info(f"Created bucket mapping for {customer_id}:{bucket_name}")
                 logger.info(f"Backend mapping: {mapping_info.get('backend_mapping', {})}")
+                logger.info(f"Location constraint: {location_constraint}")
                 
         except Exception as e:
             logger.error(f"Failed to create bucket mapping: {e}")
@@ -851,7 +1100,14 @@ async def create_bucket_with_mapping(
             )
         
         # Redirect to regional endpoint (customer only sees logical name)
-        regional_url = router_service.get_regional_endpoint(region_id)
+        regional_url = router_service.get_regional_endpoint(primary_location.region)
+        if not regional_url:
+            return create_s3_error_response(
+                "NoRegionalEndpoint",
+                f"No regional endpoint available for {primary_location.region}",
+                bucket_name
+            )
+        
         redirect_url = f"{regional_url}/s3/{bucket_name}"
         
         logger.info(f"Redirecting bucket creation {customer_id}:{bucket_name} to {redirect_url}")
@@ -860,8 +1116,10 @@ async def create_bucket_with_mapping(
             status_code=307,
             headers={
                 "X-Customer-ID": customer_id,
-                "X-Region-ID": region_id,
-                "X-Bucket-Mapping": "created"
+                "X-Region-ID": primary_location.region,
+                "X-Primary-Zone": primary_zone,
+                "X-Bucket-Mapping": "created",
+                "X-Location-Constraint": location_constraint
             }
         )
     
@@ -879,11 +1137,27 @@ async def create_bucket_with_mapping(
                         bucket_name
                     )
                 
-                # Create buckets on all backends using mapped names
+                # Get location constraint for this bucket
+                location_manager = LocationConstraintManager(session)
+                location_policy = location_manager.get_location_constraint(customer_id, bucket_name)
+                
+                if location_policy:
+                    # Only create bucket in primary zone initially
+                    primary_zone_from_policy = location_policy.get('primary_zone')
+                    logger.info(f"Creating bucket only in primary zone: {primary_zone_from_policy}")
+                    
+                    # Filter backend mapping to only primary zone backends
+                    primary_backends = get_backends_for_zone(primary_zone_from_policy)
+                    filtered_mapping = {k: v for k, v in backend_mapping.items() if k in primary_backends}
+                else:
+                    # Fallback to all backends if no location policy
+                    filtered_mapping = backend_mapping
+                
+                # Create buckets on selected backends using mapped names
                 creation_results = []
                 s3_backends = load_s3_backends()
                 
-                for backend_id, backend_bucket_name in backend_mapping.items():
+                for backend_id, backend_bucket_name in filtered_mapping.items():
                     if backend_id in s3_backends:
                         try:
                             # Create bucket on backend using hashed name
@@ -893,6 +1167,7 @@ async def create_bucket_with_mapping(
                             creation_results.append({
                                 "backend_id": backend_id,
                                 "backend_bucket_name": backend_bucket_name,
+                                "zone": primary_zone_from_policy if location_policy else "unknown",
                                 "status": "success" if result else "failed"
                             })
                             
@@ -906,6 +1181,7 @@ async def create_bucket_with_mapping(
                             creation_results.append({
                                 "backend_id": backend_id,
                                 "backend_bucket_name": backend_bucket_name,
+                                "zone": primary_zone_from_policy if location_policy else "unknown",
                                 "status": "failed",
                                 "error": str(e)
                             })
@@ -918,14 +1194,25 @@ async def create_bucket_with_mapping(
                 success_count = sum(1 for r in creation_results if r["status"] == "success")
                 
                 if success_count > 0:
-                    return {
+                    response_data = {
                         "message": f"Bucket '{bucket_name}' created",
                         "logical_name": bucket_name,
                         "customer_id": customer_id,
+                        "primary_zone": primary_zone_from_policy if location_policy else "unknown",
+                        "location_constraint": location_constraint,
                         "backends_created": success_count,
-                        "total_backends": len(backend_mapping),
+                        "total_backends": len(filtered_mapping),
                         "details": creation_results
                     }
+                    
+                    if location_policy:
+                        response_data["location_policy"] = {
+                            "allowed_locations": location_policy.get('location_constraint', []),
+                            "cross_border_replication": location_policy.get('cross_border_replication', False),
+                            "replica_count": location_policy.get('replica_count', 1)
+                        }
+                    
+                    return response_data
                 else:
                     return create_s3_error_response(
                         "InternalError",
@@ -1160,6 +1447,26 @@ def list_backend_objects(backend_config: Dict, bucket_name: str) -> List[Dict]:
     except Exception as e:
         logger.error(f"Failed to list backend objects: {e}")
         return []
+
+# Helper functions for location constraint support
+def get_backends_for_zone(zone: str) -> List[str]:
+    """Get available backend IDs for a specific zone"""
+    # This would query provider database or config
+    # For now, return static mapping based on zone
+    zone_backends = {
+        'fi-hel-st-1': ['spacetime'],
+        'fi-hel-uc-1': ['upcloud'],
+        'fi-hel-hz-1': ['hetzner'],
+        'de-fra-st-1': ['spacetime'],
+        'de-fra-uc-1': ['upcloud'],
+        'de-fra-hz-1': ['hetzner'],
+        'fr-par-st-1': ['spacetime'],
+        'fr-par-uc-1': ['upcloud'],
+        'fr-par-hz-1': ['hetzner'],
+    }
+    
+    # Return all backends for the zone, or default set
+    return zone_backends.get(zone, ['spacetime', 'upcloud', 'hetzner'])
 
 if __name__ == "__main__":
     import uvicorn

@@ -285,6 +285,27 @@ CREATE TABLE bucket_creation_log (
     CONSTRAINT valid_status CHECK (status IN ('success', 'failed', 'pending', 'retrying'))
 );
 
+-- Bucket location constraints for S3 LocationConstraint support
+CREATE TABLE bucket_location_constraints (
+    id SERIAL PRIMARY KEY,
+    customer_id VARCHAR(100) NOT NULL,
+    logical_name VARCHAR(63) NOT NULL,
+    location_constraint VARCHAR(500) NOT NULL, -- Comma-separated list like "fi,de-fra,fr"
+    replication_policy JSONB NOT NULL, -- Full policy with zones, countries, etc.
+    replica_count INTEGER DEFAULT 1,
+    status VARCHAR(20) DEFAULT 'active',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    -- Constraints
+    CONSTRAINT unique_customer_bucket_location UNIQUE (customer_id, logical_name),
+    CONSTRAINT valid_replica_count CHECK (replica_count >= 1),
+    CONSTRAINT valid_constraint_status CHECK (status IN ('active', 'suspended', 'deleted')),
+    
+    -- Foreign key to bucket mappings
+    FOREIGN KEY (customer_id, logical_name) REFERENCES bucket_mappings(customer_id, logical_name)
+);
+
 -- Create indexes for performance
 CREATE INDEX idx_customers_customer_id ON customers(customer_id);
 CREATE INDEX idx_customers_region ON customers(region_id);
@@ -358,6 +379,11 @@ CREATE INDEX idx_bucket_creation_log_customer ON bucket_creation_log(customer_id
 CREATE INDEX idx_bucket_creation_log_backend ON bucket_creation_log(backend_id);
 CREATE INDEX idx_bucket_creation_log_created ON bucket_creation_log(created_at);
 CREATE INDEX idx_bucket_creation_log_status ON bucket_creation_log(status);
+
+CREATE INDEX idx_bucket_location_constraints_customer ON bucket_location_constraints(customer_id);
+CREATE INDEX idx_bucket_location_constraints_logical_name ON bucket_location_constraints(logical_name);
+CREATE INDEX idx_bucket_location_constraints_status ON bucket_location_constraints(status);
+CREATE INDEX idx_bucket_location_constraints_replica_count ON bucket_location_constraints(replica_count);
 
 -- Views for operational queries
 

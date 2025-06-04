@@ -70,6 +70,63 @@ else
     exit 1
 fi
 
+# Step 1.5: Show LocationConstraint functionality  
+echo ""
+echo -e "${BLUE}Step 1.5: Demonstrate LocationConstraint functionality${NC}"
+
+# Test different location constraints
+location_examples=(
+    "fi"                      # Single region (Finland only)
+    "fi,de"                   # Cross-border (Finland + Germany)
+    "fi-hel-st-1"            # Specific zone
+    "fi,de,fr"               # Multi-country replication
+)
+
+echo ""
+echo "Testing LocationConstraint examples:"
+for i in "${!location_examples[@]}"; do
+    constraint="${location_examples[$i]}"
+    echo ""
+    echo "Example $((i+1)): LocationConstraint='$constraint'"
+    
+    # Test the constraint
+    test_response=$(curl -s -X POST "http://localhost:8000/api/location-constraints/test" \
+        -H "Content-Type: application/json" \
+        -d "{\"location_constraint\": \"$constraint\", \"replica_count\": 2}" 2>/dev/null)
+    
+    if echo "$test_response" | grep -q '"valid": true'; then
+        primary_location=$(echo "$test_response" | grep -o '"primary_location": "[^"]*"' | cut -d'"' -f4)
+        cross_border=$(echo "$test_response" | grep -o '"cross_border_allowed": [^,}]*' | cut -d: -f2 | tr -d ' ')
+        countries=$(echo "$test_response" | grep -o '"countries_involved": \[[^]]*\]')
+        replication_zones=$(echo "$test_response" | grep -o '"replication_zones": \[[^]]*\]')
+        
+        echo "  ✅ Primary location: $primary_location"
+        echo "  ✅ Cross-border replication: $cross_border"
+        [ ! -z "$countries" ] && echo "  ✅ Countries: $countries"
+        [ ! -z "$replication_zones" ] && echo "  ✅ Replication zones: $replication_zones"
+        
+        case $constraint in
+            "fi")
+                echo "  💡 Single region: Bucket placed in Finland only"
+                ;;
+            "fi,de")  
+                echo "  💡 Cross-border: Allows replication between Finland and Germany"
+                ;;
+            "fi-hel-st-1")
+                echo "  💡 Specific zone: Bucket placed in exact zone fi-hel-st-1"
+                ;;
+            "fi,de,fr")
+                echo "  💡 Multi-country: Enables replication across 3 countries"
+                ;;
+        esac
+    else
+        echo "  ❌ Invalid constraint (this shouldn't happen with our examples)"
+    fi
+done
+
+echo ""
+echo -e "${GREEN}✅ LocationConstraint enables sophisticated location control!${NC}"
+
 # Step 2: Upload a file
 echo ""
 echo -e "${BLUE}Step 2: Upload file to bucket${NC}"
@@ -138,10 +195,29 @@ echo "• Customer created bucket: $BUCKET_NAME"
 echo "• System generated unique backend names for each provider"
 echo "• Customer uploaded and accessed files using logical name"
 echo "• Backend namespace collisions completely avoided"
+echo "• LocationConstraint enables sophisticated location control"
+echo "• Cross-border replication policies enforced automatically"
 echo ""
 echo "🔧 Benefits achieved:"
 echo "• ✅ Multiple customers can use the same logical bucket names"
 echo "• ✅ Each backend gets unique bucket names (no collisions)"
 echo "• ✅ Customer experience remains simple and familiar"
 echo "• ✅ True multi-backend replication enabled"
-echo "• ✅ GDPR-compliant with regional data sovereignty" 
+echo "• ✅ GDPR-compliant with regional data sovereignty"
+echo "• ✅ LocationConstraint controls bucket placement"
+echo "• ✅ Order-based priority (first location = primary)"
+echo "• ✅ Cross-border replication only when explicitly allowed"
+echo "• ✅ Flexible region/zone targeting (fi, fi-hel, fi-hel-st-1)"
+echo ""
+echo "🌍 LocationConstraint Examples:"
+echo "• 'fi' → Single region (Finland only)"
+echo "• 'fi,de' → Cross-border replication allowed"  
+echo "• 'fi-hel-st-1' → Specific zone placement"
+echo "• 'fi,de,fr' → Multi-country replication enabled"
+echo ""
+echo "📚 Advanced Features:"
+echo "• Replica count management via API"
+echo "• Location constraint validation"
+echo "• Available locations discovery"
+echo "• Cross-border policy enforcement"
+echo "• Zone-specific backend selection" 

@@ -28,6 +28,15 @@ cd code/gateway
 python3 bucket_mapping.py
 echo ""
 
+# Test the location constraint module directly
+echo ""
+echo -e "${BLUE}🌍 Testing Location Constraint Module${NC}"
+echo "------------------------------------"
+
+echo "Running Python location constraint tests..."
+python3 location_constraint.py
+cd ../..
+
 # Test the validation module directly
 echo ""
 echo -e "${BLUE}📋 Testing S3 Validation Module Directly${NC}"
@@ -346,9 +355,66 @@ else
     echo -e "   ${RED}❌ STEP 1 FAILED${NC}: Bucket creation failed (HTTP $create_wf_http_code)"
 fi
 
-# Test 4: List customer buckets with mappings
+# Test 4: LocationConstraint bucket creation
 echo ""
-echo "4. Testing customer bucket listing with mappings:"
+echo "4. Testing bucket creation with LocationConstraint:"
+location_bucket="location-test-$(date +%s)"
+location_customer="location-customer"
+
+# Test different location constraints
+location_test_cases=(
+    "fi"                    # Single region (default)
+    "fi,de"                 # Cross-border replication allowed
+    "fi-hel-st-1"          # Specific zone
+    "de-fra"               # Different primary region
+)
+
+for location_constraint in "${location_test_cases[@]}"; do
+    echo ""
+    echo "   Testing LocationConstraint: '$location_constraint'"
+    
+    # Create bucket name with location info
+    test_bucket="${location_bucket}-${location_constraint//[^a-z0-9]/-}"
+    
+    # Create bucket with LocationConstraint in XML body
+    xml_body="<CreateBucketConfiguration><LocationConstraint>$location_constraint</LocationConstraint></CreateBucketConfiguration>"
+    
+    create_loc_response=$(curl -s -w "HTTP_CODE:%{http_code}" -X PUT \
+        -H "X-Customer-ID: $location_customer" \
+        -H "Content-Type: application/xml" \
+        -d "$xml_body" \
+        "http://localhost:8000/s3/$test_bucket" 2>/dev/null)
+    
+    create_loc_http_code=$(echo "$create_loc_response" | grep -o 'HTTP_CODE:[0-9]*' | cut -d: -f2)
+    
+    case $create_loc_http_code in
+        307|200) 
+            echo -e "     ${GREEN}✅ SUCCESS${NC}: Bucket created with LocationConstraint"
+            
+            # Check location constraint was stored
+            sleep 1
+            constraint_check=$(curl -s "http://localhost:8000/api/location-constraints/$location_customer/$test_bucket" 2>/dev/null)
+            if echo "$constraint_check" | grep -q '"location_policy"'; then
+                primary_zone=$(echo "$constraint_check" | grep -o '"primary_zone": "[^"]*"' | cut -d'"' -f4)
+                cross_border=$(echo "$constraint_check" | grep -o '"cross_border_replication": [^,}]*' | cut -d: -f2 | tr -d ' ')
+                echo "     • Primary zone: $primary_zone"
+                echo "     • Cross-border replication: $cross_border"
+            else
+                echo -e "     ${YELLOW}⚠️ WARNING${NC}: Could not verify location constraint storage"
+            fi
+            ;;
+        400)
+            echo -e "     ${RED}❌ REJECTED${NC}: Invalid LocationConstraint (expected for invalid cases)"
+            ;;
+        *)
+            echo -e "     ${YELLOW}⚠️ UNEXPECTED${NC}: HTTP $create_loc_http_code"
+            ;;
+    esac
+done
+
+# Test 5: List customer buckets with mappings
+echo ""
+echo "5. Testing customer bucket listing with mappings:"
 echo "   Listing buckets for integration-test-customer..."
 bucket_list_response=$(curl -s "http://localhost:8000/api/bucket-mappings/integration-test-customer" 2>/dev/null)
 
@@ -410,6 +476,10 @@ echo "• Customer isolation through deterministic hashing"
 echo "• GDPR-compliant HTTP redirects (global → regional)"
 echo "• Multi-backend replication support"
 echo "• Complete S3 workflow: Create bucket → Upload objects → List contents"
+echo "• LocationConstraint with comma-separated regions/zones"
+echo "• Cross-border replication control based on specified countries"
+echo "• Order-based location priority (first = primary)"
+echo "• Replica count management via API"
 echo ""
 echo "🗺️ Bucket Hash Mapping Benefits:"
 echo "• Unique backend names across all customers and providers"
@@ -418,17 +488,27 @@ echo "• Enables true multi-backend replication"
 echo "• Customer only sees logical names"
 echo "• Deterministic generation (same input = same output)"
 echo ""
+echo "🌍 LocationConstraint Benefits:"
+echo "• S3-compatible location specification (comma-separated list)"
+echo "• Order-based priority: first location = primary placement"
+echo "• Cross-border replication only when multiple countries specified"
+echo "• Flexible region/zone targeting (fi, fi-hel, fi-hel-st-1)"
+echo "• Replica count controls actual replication (via tags/API)"
+echo ""
 echo "📋 Workflow Requirements:"
 echo "• Buckets must be created first using PUT /s3/{bucket-name}"
 echo "• Objects can only be uploaded to existing buckets"
 echo "• Each bucket gets unique backend names via hash mapping"
 echo "• Customer sees logical names, backends see hashed names"
+echo "• LocationConstraint controls where bucket is initially placed"
+echo "• Replication expands to additional locations based on replica_count"
 echo ""
 echo "🔧 Configuration:"
 echo "• Enable validation: ENABLE_S3_VALIDATION=true"
 echo "• Strict mode: S3_VALIDATION_STRICT=true"
 echo "• Bucket mapping: Always enabled"
-echo "• Test endpoints: /validation/test, /api/bucket-mappings/test"
+echo "• LocationConstraint: Built-in support"
+echo "• Test endpoints: /validation/test, /api/bucket-mappings/test, /api/location-constraints/test"
 echo ""
 
 # Check if services are running
@@ -440,4 +520,78 @@ fi
 if ! curl -s http://localhost:8001/health > /dev/null; then
     echo -e "${YELLOW}⚠️ Note: Regional gateway not running. Start with:${NC}"
     echo "./start.sh"
-fi 
+fi
+
+echo ""
+echo -e "${BLUE}🌍 Testing LocationConstraint API Endpoints${NC}"
+echo "-------------------------------------------"
+
+# Test available locations
+echo ""
+echo "1. Testing available locations endpoint:"
+locations_response=$(curl -s "http://localhost:8000/api/location-constraints/available-locations" 2>/dev/null)
+
+if echo "$locations_response" | grep -q '"available_locations"'; then
+    echo -e "   ${GREEN}✅ SUCCESS${NC}: Available locations retrieved"
+    
+    # Count countries
+    country_count=$(echo "$locations_response" | grep -o '"Finland"' | wc -l)
+    [ "$country_count" -gt 0 ] && echo "   • Finland locations available"
+    
+    country_count=$(echo "$locations_response" | grep -o '"Germany"' | wc -l)
+    [ "$country_count" -gt 0 ] && echo "   • Germany locations available"
+    
+    country_count=$(echo "$locations_response" | grep -o '"France"' | wc -l)
+    [ "$country_count" -gt 0 ] && echo "   • France locations available"
+else
+    echo -e "   ${RED}❌ FAILED${NC}: Could not retrieve available locations"
+fi
+
+# Test location constraint parsing
+test_constraints=(
+    "fi"                    # Single region
+    "fi,de"                 # Cross-border
+    "fi-hel-st-1"          # Specific zone
+    "fi,de,fr"             # Multi-country
+    "fi-hel-st-1,de-fra-uc-1"  # Specific zones
+    "invalid-location"      # Invalid
+)
+
+echo ""
+echo "2. Testing location constraint parsing:"
+for constraint in "${test_constraints[@]}"; do
+    echo ""
+    echo "   Testing constraint: '$constraint'"
+    
+    test_response=$(curl -s -X POST "http://localhost:8000/api/location-constraints/test" \
+        -H "Content-Type: application/json" \
+        -d "{\"location_constraint\": \"$constraint\", \"replica_count\": 2}" 2>/dev/null)
+    
+    if echo "$test_response" | grep -q '"test": true'; then
+        if echo "$test_response" | grep -q '"valid": true'; then
+            echo -e "     ${GREEN}✅ VALID${NC}: Constraint parsed successfully"
+            
+            # Extract policy details
+            primary_location=$(echo "$test_response" | grep -o '"primary_location": "[^"]*"' | cut -d'"' -f4)
+            cross_border=$(echo "$test_response" | grep -o '"cross_border_allowed": [^,}]*' | cut -d: -f2 | tr -d ' ')
+            
+            echo "     Primary: $primary_location"
+            echo "     Cross-border: $cross_border"
+            
+            # Show replication zones
+            replication_zones=$(echo "$test_response" | grep -o '"replication_zones": \[[^]]*\]')
+            if [ ! -z "$replication_zones" ]; then
+                echo "     Replication: $replication_zones"
+            fi
+            
+        elif echo "$test_response" | grep -q '"valid": false'; then
+            echo -e "     ${RED}❌ INVALID${NC}: Constraint rejected (expected for invalid cases)"
+            errors=$(echo "$test_response" | grep -o '"errors": \[[^]]*\]')
+            [ ! -z "$errors" ] && echo "     Errors: $errors"
+        else
+            echo -e "     ${YELLOW}⚠️ UNKNOWN${NC}: Unexpected response format"
+        fi
+    else
+        echo -e "     ${RED}❌ FAILED${NC}: Service error or invalid response"
+    fi
+done 
