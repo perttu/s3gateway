@@ -1,26 +1,70 @@
 version: '3.8'
 
 services:
-  postgres:
+  # GDPR-Compliant Global Database - Provider registry and routing information ONLY
+  postgres-global:
     image: postgres:15
-    container_name: s3gateway_postgres
+    container_name: s3gateway_postgres_global
     environment:
-      POSTGRES_DB: s3gateway
+      POSTGRES_DB: s3gateway_global
       POSTGRES_USER: s3gateway
       POSTGRES_PASSWORD: s3gateway_pass
     ports:
-      - "5433:5432"
+      - "5432:5432"  # Global database port
     volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./code/gateway/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+      - postgres_global_data:/var/lib/postgresql/data
+      - ./code/gateway/schema_global_gdpr.sql:/docker-entrypoint-initdb.d/schema_global_gdpr.sql
     networks:
       - s3gateway_network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U s3gateway"]
+      test: ["CMD-SHELL", "pg_isready -U s3gateway -d s3gateway_global"]
       interval: 10s
       timeout: 5s
       retries: 5
 
+  # Regional Database - FI-HEL region (customer object metadata)
+  postgres-fi-hel:
+    image: postgres:15
+    container_name: s3gateway_postgres_fi_hel
+    environment:
+      POSTGRES_DB: s3gateway_regional
+      POSTGRES_USER: s3gateway
+      POSTGRES_PASSWORD: s3gateway_pass
+    ports:
+      - "5433:5432"  # Regional database port
+    volumes:
+      - postgres_fi_hel_data:/var/lib/postgresql/data
+      - ./code/gateway/schema_regional.sql:/docker-entrypoint-initdb.d/schema_regional.sql
+    networks:
+      - s3gateway_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U s3gateway -d s3gateway_regional"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Regional Database - DE-FRA region (for future expansion)
+  postgres-de-fra:
+    image: postgres:15
+    container_name: s3gateway_postgres_de_fra
+    environment:
+      POSTGRES_DB: s3gateway_regional
+      POSTGRES_USER: s3gateway
+      POSTGRES_PASSWORD: s3gateway_pass
+    ports:
+      - "5434:5432"  # Regional database port
+    volumes:
+      - postgres_de_fra_data:/var/lib/postgresql/data
+      - ./code/gateway/schema_regional.sql:/docker-entrypoint-initdb.d/schema_regional.sql
+    networks:
+      - s3gateway_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U s3gateway -d s3gateway_regional"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # S3Proxy (for fallback/testing)
   s3proxy:
     build: ./docker/s3proxy
     container_name: s3gateway_s3proxy
@@ -35,28 +79,103 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-    depends_on:
-      - postgres
 
-  gateway:
+  # GDPR-Compliant Global Gateway with S3 Validation
+  gateway-global:
     build:
-      context: ./code/gateway
+      context: ./docker/gateway
       dockerfile: Dockerfile
-    container_name: s3gateway_service
+    container_name: s3gateway_global
     environment:
-      DATABASE_URL: postgresql://s3gateway:s3gateway_pass@postgres:5432/s3gateway
+      DATABASE_URL: postgresql://s3gateway:s3gateway_pass@postgres-global:5432/s3gateway_global
+      GATEWAY_TYPE: global
+      REGIONAL_ENDPOINTS: '{"FI-HEL": "http://localhost:8001", "DE-FRA": "http://localhost:8002"}'
+      ENABLE_GDPR_REDIRECTS: "true"          # Enable GDPR-compliant redirects
+      ENABLE_S3_VALIDATION: "true"           # Enable S3 naming validation
+      S3_VALIDATION_STRICT: "false"          # Standard validation mode
       S3PROXY_URL: http://s3proxy:8080
-      PROVIDERS_FILE: /app/providers_flat.csv
-      S3_BACKENDS_CONFIG: /app/config/s3_backends.json
     volumes:
+      - ./code/gateway/main_gdpr_compliant_validated.py:/app/main.py
+      - ./code/gateway/s3_validation.py:/app/s3_validation.py
       - ./providers_flat.csv:/app/providers_flat.csv
-      - ./config/s3_backends.json:/app/config/s3_backends.json
     ports:
-      - "8000:8000"
+      - "8000:8000"  # Global endpoint
     networks:
       - s3gateway_network
     depends_on:
-      postgres:
+      postgres-global:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Regional Gateway - FI-HEL region with S3 Validation
+  gateway-fi-hel:
+    build:
+      context: ./docker/gateway
+      dockerfile: Dockerfile
+    container_name: s3gateway_fi_hel
+    environment:
+      DATABASE_URL: postgresql://s3gateway:s3gateway_pass@postgres-fi-hel:5432/s3gateway_regional
+      GLOBAL_DATABASE_URL: postgresql://s3gateway:s3gateway_pass@postgres-global:5432/s3gateway_global
+      GATEWAY_TYPE: regional
+      REGION_ID: FI-HEL
+      ENABLE_S3_VALIDATION: "true"           # Enable S3 naming validation
+      S3_VALIDATION_STRICT: "false"          # Standard validation mode
+      S3_BACKENDS_CONFIG: /app/config/s3_backends_fi_hel.json
+      PROVIDERS_FILE: /app/providers_flat.csv
+      S3PROXY_URL: http://s3proxy:8080
+    volumes:
+      - ./code/gateway/main_gdpr_compliant_validated.py:/app/main.py
+      - ./code/gateway/s3_validation.py:/app/s3_validation.py
+      - ./providers_flat.csv:/app/providers_flat.csv
+      - ./config/s3_backends.json:/app/config/s3_backends_fi_hel.json
+    ports:
+      - "8001:8000"  # Regional endpoint FI-HEL
+    networks:
+      - s3gateway_network
+    depends_on:
+      postgres-fi-hel:
+        condition: service_healthy
+      postgres-global:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Regional Gateway - DE-FRA region with S3 Validation
+  gateway-de-fra:
+    build:
+      context: ./docker/gateway
+      dockerfile: Dockerfile
+    container_name: s3gateway_de_fra
+    environment:
+      DATABASE_URL: postgresql://s3gateway:s3gateway_pass@postgres-de-fra:5432/s3gateway_regional
+      GLOBAL_DATABASE_URL: postgresql://s3gateway:s3gateway_pass@postgres-global:5432/s3gateway_global
+      GATEWAY_TYPE: regional
+      REGION_ID: DE-FRA
+      ENABLE_S3_VALIDATION: "true"           # Enable S3 naming validation
+      S3_VALIDATION_STRICT: "true"           # Strict validation mode for German region
+      S3_BACKENDS_CONFIG: /app/config/s3_backends_de_fra.json
+      PROVIDERS_FILE: /app/providers_flat.csv
+      S3PROXY_URL: http://s3proxy:8080
+    volumes:
+      - ./code/gateway/main_gdpr_compliant_validated.py:/app/main.py
+      - ./code/gateway/s3_validation.py:/app/s3_validation.py
+      - ./providers_flat.csv:/app/providers_flat.csv
+      - ./config/s3_backends.json:/app/config/s3_backends_de_fra.json
+    ports:
+      - "8002:8000"  # Regional endpoint DE-FRA
+    networks:
+      - s3gateway_network
+    depends_on:
+      postgres-de-fra:
+        condition: service_healthy
+      postgres-global:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -65,9 +184,61 @@ services:
       retries: 3
 
 volumes:
-  postgres_data:
+  postgres_global_data:
+  postgres_fi_hel_data:
+  postgres_de_fra_data:
   s3proxy_data:
 
 networks:
   s3gateway_network:
-    driver: bridge 
+    driver: bridge
+
+# Complete S3 Gateway Features:
+#
+# 1. GDPR-Compliant Two-Layer Architecture:
+#    - Global gateway with HTTP redirects (no proxying)
+#    - Regional gateways with complete customer data
+#    - Minimal data in global database (routing only)
+#    - Full compliance data in regional databases
+#
+# 2. S3 RFC-Compliant Naming Validation:
+#    - Bucket names: 3-63 chars, lowercase, no consecutive dots, no IP format
+#    - Object keys: max 1024 bytes, UTF-8 safe, optional strict filtering
+#    - Prevents backend creation failures
+#    - S3-compatible XML error responses
+#
+# 3. Multi-Region Support:
+#    - FI-HEL region: standard validation
+#    - DE-FRA region: strict validation (example)
+#    - Easy expansion to additional regions
+#
+# 4. Configuration Options:
+#    - ENABLE_S3_VALIDATION: true/false (default: true)
+#    - S3_VALIDATION_STRICT: true/false (varies by region)
+#    - ENABLE_GDPR_REDIRECTS: true/false (default: true)
+#
+# 5. Testing & Monitoring:
+#    - Validation test endpoints: /validation/test
+#    - Health checks with compliance status
+#    - Comprehensive audit trails
+#
+# Quick Start:
+#   docker-compose up -d
+#   ./test-s3-validation.sh
+#
+# Usage Examples:
+#
+# 1. Test validation:
+#    curl "http://localhost:8000/validation/test?bucket_name=test-bucket&object_key=file.txt"
+#
+# 2. Valid S3 operations (will be redirected and succeed):
+#    curl -X PUT -H "X-Customer-ID: demo-customer" http://localhost:8000/s3/valid-bucket
+#    curl -X PUT -H "X-Customer-ID: demo-customer" -d "content" http://localhost:8000/s3/valid-bucket/valid-key.txt
+#
+# 3. Invalid S3 operations (will be rejected with HTTP 400):
+#    curl -X PUT -H "X-Customer-ID: demo-customer" http://localhost:8000/s3/Invalid-Bucket-Name
+#    curl -X PUT -H "X-Customer-ID: demo-customer" http://localhost:8000/s3/test/invalid-key
+#
+# 4. Check compliance:
+#    curl http://localhost:8000/compliance/audit  # Global minimal data
+#    curl http://localhost:8001/api/compliance/audit  # Regional full data 

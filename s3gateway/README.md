@@ -6,32 +6,48 @@ A dockerized S3-compatible gateway service with real S3 backend integration, dat
 
 - **Real S3 Backend Integration**: Connects to actual S3-compatible storage providers
 - **S3-Compatible API**: Full S3 operations (GET, PUT, DELETE, LIST) with `/s3/` prefix
+- **S3 RFC-Compliant Validation**: Validates bucket names and object keys to prevent backend failures
+- **GDPR-Compliant Architecture**: Two-layer design with HTTP redirects for data sovereignty
 - **Data Sovereignty**: Provider selection based on country/region requirements
 - **Versioning & Immutability**: Object versioning with immutable storage support
 - **Metadata Authority**: PostgreSQL as single source of truth for object metadata
 - **Provider Management**: Load and manage S3 providers from CSV and JSON configuration
 - **Operation Logging**: Comprehensive logging of all S3 operations
 - **Replication Management**: Multi-zone replication with real-time status tracking
-- **Hardcoded Bucket Strategy**: All operations use a predefined bucket (`2025-datatransfer`)
+- **Multi-Regional Support**: Separate databases and gateways for different jurisdictions
 
 ## Architecture
 
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   S3 Client     │    │  Gateway API    │    │   PostgreSQL    │
-│                 │────│                 │────│                 │
-│ (AWS CLI,       │    │  FastAPI +      │    │ Metadata Store  │
-│  boto3, etc.)   │    │  Real S3        │    │ (Authority)     │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-                              │
-                              │
-                    ┌─────────────────┐
-                    │ Real S3 Backends│
-                    │                 │
-                    │ (Spacetime,     │
-                    │  UpCloud,       │
-                    │  Hetzner, etc.) │
-                    └─────────────────┘
+┌─────────────────┐    ┌─────────────────────────────────────────────────────────────┐
+│   S3 Client     │    │             GDPR-Compliant Gateway Architecture            │
+│                 │    │                                                             │
+│ (AWS CLI,       │────│  ┌─────────────────┐           ┌─────────────────────────┐ │
+│  boto3, etc.)   │    │  │ Global Gateway  │──HTTP 307─│   Regional Gateways     │ │
+└─────────────────┘    │  │                 │  Redirect │                         │ │
+                       │  │ • S3 Validation │           │ • FI-HEL (Standard)     │ │
+                       │  │ • Customer      │           │ • DE-FRA (Strict)       │ │
+                       │  │   Routing       │           │ • Full Customer Data    │ │
+                       │  │ • Minimal Data  │           │ • Compliance Tracking   │ │
+                       │  └─────────────────┘           └─────────────────────────┘ │
+                       │           │                                  │               │
+                       │  ┌─────────────────┐           ┌─────────────────────────┐ │
+                       │  │ Global Database │           │  Regional Databases     │ │
+                       │  │                 │           │                         │ │
+                       │  │ • Provider Info │           │ • Customer Metadata     │ │
+                       │  │ • Routing Only  │           │ • Object Metadata       │ │
+                       │  │ • NO Customer   │           │ • Operations Log        │ │
+                       │  │   Personal Data │           │ • Compliance Events     │ │
+                       │  └─────────────────┘           └─────────────────────────┘ │
+                       └─────────────────────────────────────────────────────────────┘
+                                                │
+                                      ┌─────────────────┐
+                                      │ Real S3 Backends│
+                                      │                 │
+                                      │ (Spacetime,     │
+                                      │  UpCloud,       │
+                                      │  Hetzner, etc.) │
+                                      └─────────────────┘
 ```
 
 ## Directory Structure
@@ -63,12 +79,12 @@ s3gateway/
 1. **Start the services:**
 ```bash
 cd s3gateway
-docker-compose up -d
+./start.sh
 ```
 
-2. **Initialize the hardcoded bucket:**
+2. **Run comprehensive tests:**
 ```bash
-curl -X POST http://localhost:8000/initialize-bucket
+./test.sh
 ```
 
 3. **Check service status:**
@@ -79,7 +95,12 @@ curl http://localhost:8000/health
 
 4. **View logs:**
 ```bash
-docker-compose logs -f gateway
+docker-compose logs -f
+```
+
+5. **GDPR compliance demo:**
+```bash
+./demo-gdpr-compliance.sh
 ```
 
 ## API Endpoints
@@ -356,4 +377,59 @@ For production deployment, consider:
 4. **Load Balancing**: Distribute requests across multiple gateway instances
 5. **Monitoring**: Add metrics collection and alerting
 6. **Backup**: Regular database backups for metadata
-7. **Performance**: Optimize database queries and connection pooling 
+7. **Performance**: Optimize database queries and connection pooling
+
+## S3 Validation Features
+
+The gateway includes comprehensive S3 RFC-compliant naming validation to prevent backend creation failures:
+
+### Bucket Name Validation
+- **Length**: 3-63 characters
+- **Characters**: Lowercase letters, numbers, periods, and hyphens only
+- **Format**: Must start and end with letter or number
+- **Restrictions**: 
+  - No consecutive periods (`..`)
+  - No period-hyphen combinations (`.-` or `-.`)
+  - No IP address format (`192.168.1.1`)
+  - No forbidden prefixes (`xn--`) or suffixes (`-s3alias`, `--ol-s3`)
+
+### Object Key Validation
+- **Length**: Maximum 1024 bytes when UTF-8 encoded
+- **Characters**: UTF-8 safe characters
+- **Strict Mode**: Optional filtering of problematic characters (`&`, `$`, `@`, etc.)
+- **Control Characters**: Rejected (except tab, newline, carriage return)
+
+### Validation Modes
+- **Standard Mode**: Warnings for problematic characters, errors for invalid ones
+- **Strict Mode**: Rejects all potentially problematic characters
+- **Regional Configuration**: Different regions can use different validation levels
+
+### Testing Validation
+
+```bash
+# Test bucket and object validation
+curl "http://localhost:8000/validation/test?bucket_name=test-bucket&object_key=file.txt"
+
+# Test invalid bucket name (will be rejected)
+curl -X PUT -H "X-Customer-ID: demo-customer" http://localhost:8000/s3/Invalid-Bucket-Name
+
+# Test valid bucket name (will be redirected)  
+curl -X PUT -H "X-Customer-ID: demo-customer" http://localhost:8000/s3/valid-bucket-name
+```
+
+## Conclusion
+
+You now have a complete S3 gateway with:
+
+✅ **S3 RFC-compliant naming validation** - Prevents backend failures
+✅ **GDPR-compliant two-layer architecture** - HTTP redirects for data sovereignty  
+✅ **Multi-regional support** - FI-HEL and DE-FRA regions
+✅ **Comprehensive validation** - Bucket names and object keys
+✅ **Simple scripts** - `./start.sh` and `./test.sh` for easy operation
+✅ **Single docker-compose.yml** - Simple deployment and management
+
+Start testing with:
+```bash
+./start.sh
+./test.sh
+``` 
