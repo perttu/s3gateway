@@ -224,6 +224,67 @@ CREATE TABLE compliance_rules (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Add bucket mapping tables after the existing tables
+
+-- Bucket mappings - maps customer logical names to backend physical names
+CREATE TABLE bucket_mappings (
+    id SERIAL PRIMARY KEY,
+    customer_id VARCHAR(100) NOT NULL,
+    region_id VARCHAR(50) NOT NULL,
+    logical_name VARCHAR(63) NOT NULL, -- Customer's bucket name (S3 compliant)
+    backend_mapping JSONB NOT NULL, -- JSON object: {"backend_id": "physical_bucket_name"}
+    status VARCHAR(20) DEFAULT 'active', -- active, deleted, suspended
+    hash_algorithm VARCHAR(20) DEFAULT 'sha256',
+    naming_strategy VARCHAR(50) DEFAULT 'deterministic_hash',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    -- Constraints
+    CONSTRAINT unique_customer_bucket UNIQUE (customer_id, logical_name),
+    CONSTRAINT valid_status CHECK (status IN ('active', 'deleted', 'suspended')),
+    CONSTRAINT valid_logical_name CHECK (logical_name ~ '^[a-z0-9.-]+$' AND length(logical_name) >= 3)
+);
+
+-- Individual backend bucket names for easier querying
+CREATE TABLE backend_bucket_names (
+    id SERIAL PRIMARY KEY,
+    customer_id VARCHAR(100) NOT NULL,
+    logical_name VARCHAR(63) NOT NULL,
+    backend_id VARCHAR(50) NOT NULL,
+    backend_name VARCHAR(63) NOT NULL, -- Actual bucket name on backend
+    region_id VARCHAR(50) NOT NULL,
+    status VARCHAR(20) DEFAULT 'active',
+    collision_counter INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    -- Constraints
+    CONSTRAINT unique_backend_mapping UNIQUE (customer_id, logical_name, backend_id),
+    CONSTRAINT unique_backend_name UNIQUE (backend_id, backend_name), -- Ensure global uniqueness per backend
+    CONSTRAINT valid_backend_name CHECK (backend_name ~ '^[a-z0-9.-]+$' AND length(backend_name) >= 3),
+    
+    -- Foreign key to bucket mappings
+    FOREIGN KEY (customer_id, logical_name) REFERENCES bucket_mappings(customer_id, logical_name)
+);
+
+-- Bucket creation audit log
+CREATE TABLE bucket_creation_log (
+    id SERIAL PRIMARY KEY,
+    customer_id VARCHAR(100) NOT NULL,
+    logical_name VARCHAR(63) NOT NULL,
+    backend_id VARCHAR(50) NOT NULL,
+    backend_name VARCHAR(63) NOT NULL,
+    operation VARCHAR(20) NOT NULL, -- create, delete, suspend
+    status VARCHAR(20) NOT NULL, -- success, failed, pending
+    error_message TEXT,
+    request_id VARCHAR(100),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    -- Indexes for querying
+    CONSTRAINT valid_operation CHECK (operation IN ('create', 'delete', 'suspend', 'activate')),
+    CONSTRAINT valid_status CHECK (status IN ('success', 'failed', 'pending', 'retrying'))
+);
+
 -- Create indexes for performance
 CREATE INDEX idx_customers_customer_id ON customers(customer_id);
 CREATE INDEX idx_customers_region ON customers(region_id);
@@ -282,6 +343,21 @@ CREATE INDEX idx_compliance_rules_customer ON compliance_rules(customer_id);
 CREATE INDEX idx_compliance_rules_type ON compliance_rules(rule_type);
 CREATE INDEX idx_compliance_rules_enabled ON compliance_rules(enabled);
 CREATE INDEX idx_compliance_rules_effective ON compliance_rules(effective_from, effective_until);
+
+CREATE INDEX idx_bucket_mappings_customer ON bucket_mappings(customer_id);
+CREATE INDEX idx_bucket_mappings_region ON bucket_mappings(region_id);
+CREATE INDEX idx_bucket_mappings_status ON bucket_mappings(status);
+CREATE INDEX idx_bucket_mappings_logical_name ON bucket_mappings(logical_name);
+
+CREATE INDEX idx_backend_bucket_names_customer ON backend_bucket_names(customer_id);
+CREATE INDEX idx_backend_bucket_names_backend ON backend_bucket_names(backend_id);
+CREATE INDEX idx_backend_bucket_names_logical ON backend_bucket_names(logical_name);
+CREATE INDEX idx_backend_bucket_names_physical ON backend_bucket_names(backend_name);
+
+CREATE INDEX idx_bucket_creation_log_customer ON bucket_creation_log(customer_id);
+CREATE INDEX idx_bucket_creation_log_backend ON bucket_creation_log(backend_id);
+CREATE INDEX idx_bucket_creation_log_created ON bucket_creation_log(created_at);
+CREATE INDEX idx_bucket_creation_log_status ON bucket_creation_log(status);
 
 -- Views for operational queries
 

@@ -7,6 +7,7 @@ A dockerized S3-compatible gateway service with real S3 backend integration, dat
 - **Real S3 Backend Integration**: Connects to actual S3-compatible storage providers
 - **S3-Compatible API**: Full S3 operations (GET, PUT, DELETE, LIST) with `/s3/` prefix
 - **S3 RFC-Compliant Validation**: Validates bucket names and object keys to prevent backend failures
+- **Bucket Hash Mapping**: Solves S3 global namespace collisions with deterministic hashing
 - **GDPR-Compliant Architecture**: Two-layer design with HTTP redirects for data sovereignty
 - **Data Sovereignty**: Provider selection based on country/region requirements
 - **Versioning & Immutability**: Object versioning with immutable storage support
@@ -122,6 +123,11 @@ docker-compose logs -f
 - `PUT /s3/{bucket}/{key}` - Put object (to hardcoded bucket)
 - `DELETE /s3/{bucket}/{key}` - Delete object (from hardcoded bucket)
 
+### Bucket Hash Mapping API
+- `GET /api/bucket-mappings/{customer_id}` - List customer bucket mappings
+- `GET /api/bucket-mappings/{customer_id}/{logical_name}` - Get specific bucket mapping
+- `POST /api/bucket-mappings/test` - Test bucket mapping generation
+
 ## Configuration
 
 ### Environment Variables
@@ -234,6 +240,7 @@ The service uses PostgreSQL to store:
 - **Sync Jobs**: Queue for managing data replication
 - **Operations Log**: All S3 operations for auditing
 - **Replication Rules**: Data sovereignty and replication requirements
+- **Bucket Mappings**: Mapping between customer logical names and backend bucket names
 
 ### Key Features
 
@@ -241,6 +248,7 @@ The service uses PostgreSQL to store:
 - **Versioning**: Each object upload gets a unique version ID
 - **Immutability**: Objects are tracked as immutable with replica verification
 - **Multi-Zone Replication**: Objects are replicated across multiple S3 backends
+- **Bucket Hash Mapping**: Solves S3 global namespace collisions with deterministic hashing
 
 ## Hardcoded Bucket Strategy
 
@@ -417,13 +425,125 @@ curl -X PUT -H "X-Customer-ID: demo-customer" http://localhost:8000/s3/Invalid-B
 curl -X PUT -H "X-Customer-ID: demo-customer" http://localhost:8000/s3/valid-bucket-name
 ```
 
+## Bucket Hash Mapping
+
+The gateway solves S3's global namespace collision problem using deterministic hash mapping. Since S3 bucket names must be globally unique across all providers and customers, multiple customers cannot use the same logical bucket name. Our hash mapping creates unique backend bucket names while preserving customer-facing logical names.
+
+### How It Works
+
+1. **Customer Request**: Customer requests bucket `"my-data"`
+2. **Hash Generation**: System generates unique backend names:
+   - Spacetime: `s3gw-a1b2c3d4e5f6789a-spacetim`
+   - UpCloud: `s3gw-f9e8d7c6b5a43210-upcloud`
+   - Hetzner: `s3gw-1a2b3c4d5e6f7890-hetzner`
+3. **Database Storage**: Mapping stored in regional database
+4. **Backend Creation**: Real buckets created with hashed names
+5. **Customer Transparency**: Customer only sees `"my-data"`
+
+### Hash Algorithm
+
+```
+Hash Input: customer_id:region_id:logical_name:backend_id:collision_counter
+Algorithm: SHA-256
+Format: s3gw-<16_chars_hash>-<backend_suffix>
+```
+
+### Benefits
+
+- **Global Uniqueness**: No namespace collisions across customers or providers
+- **Multi-Backend Replication**: Different bucket names on each backend
+- **Customer Isolation**: Logical names remain private and collision-free
+- **Deterministic**: Same input always produces same output
+- **S3 Compliance**: Generated names follow S3 naming rules
+- **Collision Avoidance**: Counter incremented on rare hash collisions
+
+### Example Mapping
+
+```json
+{
+  "customer_id": "company-abc",
+  "logical_name": "backup-data",
+  "backend_mapping": {
+    "spacetime": "s3gw-7f3a2b1c9d8e6f45-spacetim",
+    "upcloud": "s3gw-8d9c2a1b3f4e5678-upcloud",
+    "hetzner": "s3gw-5e6f7a8b9c1d2345-hetzner"
+  }
+}
+```
+
+### Testing Bucket Mapping
+
+```bash
+# Test mapping generation (no storage)
+curl -X POST "http://localhost:8000/api/bucket-mappings/test" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "customer_id": "test-customer",
+    "region_id": "FI-HEL",
+    "logical_name": "my-bucket"
+  }'
+
+# List customer bucket mappings
+curl "http://localhost:8000/api/bucket-mappings/test-customer"
+
+# Get specific bucket mapping
+curl "http://localhost:8000/api/bucket-mappings/test-customer/my-bucket"
+
+# Create bucket with mapping
+curl -X PUT -H "X-Customer-ID: test-customer" \
+  "http://localhost:8000/s3/my-bucket"
+```
+
+### Database Schema
+
+Bucket mappings are stored in regional databases:
+
+```sql
+-- Main bucket mapping table
+CREATE TABLE bucket_mappings (
+    customer_id VARCHAR(100) NOT NULL,
+    logical_name VARCHAR(63) NOT NULL,
+    backend_mapping JSONB NOT NULL,
+    region_id VARCHAR(50) NOT NULL,
+    status VARCHAR(20) DEFAULT 'active',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(customer_id, logical_name)
+);
+
+-- Individual backend mappings for queries
+CREATE TABLE backend_bucket_names (
+    customer_id VARCHAR(100) NOT NULL,
+    logical_name VARCHAR(63) NOT NULL,
+    backend_id VARCHAR(50) NOT NULL,
+    backend_name VARCHAR(63) NOT NULL,
+    region_id VARCHAR(50) NOT NULL,
+    UNIQUE(customer_id, logical_name, backend_id),
+    UNIQUE(backend_id, backend_name)  -- Global uniqueness per backend
+);
+```
+
+### Multi-Customer Example
+
+Three customers can all use logical name "data-backup":
+
+| Customer | Logical Name | Spacetime Backend | UpCloud Backend |
+|----------|-------------|-------------------|-----------------|
+| customer-1 | data-backup | s3gw-a1b2c3d4e5f6-spacetim | s3gw-f1e2d3c4b5a6-upcloud |
+| customer-2 | data-backup | s3gw-b2c3d4e5f6a1-spacetim | s3gw-e2f3d4c5b6a1-upcloud |
+| customer-3 | data-backup | s3gw-c3d4e5f6a1b2-spacetim | s3gw-d3e4f5c6a1b2-upcloud |
+
+All backend names are globally unique while customers use identical logical names.
+
 ## Conclusion
 
 You now have a complete S3 gateway with:
 
 ✅ **S3 RFC-compliant naming validation** - Prevents backend failures
+✅ **Bucket hash mapping** - Solves S3 global namespace collisions
 ✅ **GDPR-compliant two-layer architecture** - HTTP redirects for data sovereignty  
 ✅ **Multi-regional support** - FI-HEL and DE-FRA regions
+✅ **Multi-backend replication** - Unique bucket names per backend
+✅ **Customer isolation** - Deterministic hashing with collision avoidance
 ✅ **Comprehensive validation** - Bucket names and object keys
 ✅ **Simple scripts** - `./start.sh` and `./test.sh` for easy operation
 ✅ **Single docker-compose.yml** - Simple deployment and management

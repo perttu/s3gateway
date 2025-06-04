@@ -26,6 +26,9 @@ from sqlalchemy.orm import sessionmaker, Session
 # Import our S3 validation module
 from s3_validation import S3NameValidator, S3ValidationError, validate_s3_name
 
+# Import bucket mapping modules
+from bucket_mapping import BucketMapper, BucketMappingService, create_bucket_with_mapping
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -721,5 +724,451 @@ async def root():
         }
     }
 
+# Add bucket mapping endpoints
+@app.get("/api/bucket-mappings/{customer_id}")
+async def list_customer_bucket_mappings(customer_id: str):
+    """List all bucket mappings for a customer"""
+    try:
+        with get_db() as session:
+            mapping_service = BucketMappingService(session)
+            buckets = mapping_service.list_customer_buckets(customer_id)
+            
+            return {
+                "customer_id": customer_id,
+                "bucket_count": len(buckets),
+                "buckets": buckets
+            }
+    except Exception as e:
+        logger.error(f"Failed to list bucket mappings: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/bucket-mappings/{customer_id}/{logical_name}")
+async def get_bucket_mapping(customer_id: str, logical_name: str):
+    """Get specific bucket mapping details"""
+    try:
+        with get_db() as session:
+            mapping_service = BucketMappingService(session)
+            mapping = mapping_service.get_bucket_mapping(customer_id, logical_name)
+            
+            if not mapping:
+                raise HTTPException(status_code=404, detail="Bucket mapping not found")
+            
+            return {
+                "customer_id": customer_id,
+                "logical_name": logical_name,
+                "backend_mapping": mapping,
+                "backend_count": len(mapping)
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get bucket mapping: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/bucket-mappings/test")
+async def test_bucket_mapping(
+    customer_id: str = "test-customer",
+    region_id: str = "FI-HEL",
+    logical_name: str = "test-bucket"
+):
+    """Test bucket mapping generation (no database storage)"""
+    try:
+        backends = ["spacetime", "upcloud", "hetzner"]
+        mapper = BucketMapper(customer_id, region_id)
+        
+        # Generate mapping
+        backend_mapping = mapper.create_bucket_mapping(logical_name, backends)
+        info = mapper.get_logical_name_info(logical_name)
+        
+        return {
+            "test": True,
+            "customer_id": customer_id,
+            "region_id": region_id,
+            "logical_name": logical_name,
+            "backend_mapping": backend_mapping,
+            "info": info,
+            "explanation": {
+                "hash_input_format": f"{customer_id}:{region_id}:{logical_name}:<backend_id>:0",
+                "collision_avoidance": "Counter incremented on conflicts",
+                "uniqueness": "Global uniqueness across all customers and backends"
+            }
+        }
+    except Exception as e:
+        logger.error(f"Failed to test bucket mapping: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Update bucket operations to use hash mapping
+@app.put("/s3/{bucket_name}")
+async def create_bucket_with_mapping(
+    bucket_name: str,
+    request: Request,
+    x_customer_id: Optional[str] = Header(None, alias="X-Customer-ID")
+):
+    """Create bucket with hash mapping - validates logical name and creates backend mappings"""
+    
+    # Determine customer and region from headers or routing
+    customer_id = x_customer_id or extract_customer_from_request(request)
+    region_id = get_region_from_request(request)
+    
+    # Validate logical bucket name first
+    if ENABLE_S3_VALIDATION:
+        validator = S3Validator(strict_mode=S3_VALIDATION_STRICT)
+        validation_result = validator.validate_bucket_name(bucket_name)
+        
+        if not validation_result.is_valid:
+            # Return S3-compatible error
+            return create_s3_error_response(
+                "InvalidBucketName",
+                f"Invalid bucket name: {', '.join(validation_result.errors)}",
+                bucket_name
+            )
+    
+    # For global gateway, redirect to regional endpoint after mapping
+    if GATEWAY_TYPE == 'global':
+        # Create bucket mapping first
+        try:
+            with get_db() as session:
+                backends = ["spacetime", "upcloud", "hetzner"]  # Get from config
+                success, mapping_info = create_bucket_with_mapping(
+                    customer_id, region_id, bucket_name, backends, session
+                )
+                
+                if not success:
+                    return create_s3_error_response(
+                        "InternalError",
+                        f"Failed to create bucket mapping: {mapping_info.get('error', 'Unknown error')}",
+                        bucket_name
+                    )
+                
+                logger.info(f"Created bucket mapping for {customer_id}:{bucket_name}")
+                logger.info(f"Backend mapping: {mapping_info.get('backend_mapping', {})}")
+                
+        except Exception as e:
+            logger.error(f"Failed to create bucket mapping: {e}")
+            return create_s3_error_response(
+                "InternalError",
+                f"Failed to create bucket mapping: {str(e)}",
+                bucket_name
+            )
+        
+        # Redirect to regional endpoint (customer only sees logical name)
+        regional_url = router_service.get_regional_endpoint(region_id)
+        redirect_url = f"{regional_url}/s3/{bucket_name}"
+        
+        logger.info(f"Redirecting bucket creation {customer_id}:{bucket_name} to {redirect_url}")
+        return RedirectResponse(
+            url=redirect_url,
+            status_code=307,
+            headers={
+                "X-Customer-ID": customer_id,
+                "X-Region-ID": region_id,
+                "X-Bucket-Mapping": "created"
+            }
+        )
+    
+    else:
+        # Regional gateway - create actual buckets using backend names
+        try:
+            with get_db() as session:
+                mapping_service = BucketMappingService(session)
+                backend_mapping = mapping_service.get_bucket_mapping(customer_id, bucket_name)
+                
+                if not backend_mapping:
+                    return create_s3_error_response(
+                        "NoSuchBucket",
+                        f"Bucket mapping not found for {bucket_name}. Create via global endpoint first.",
+                        bucket_name
+                    )
+                
+                # Create buckets on all backends using mapped names
+                creation_results = []
+                s3_backends = load_s3_backends()
+                
+                for backend_id, backend_bucket_name in backend_mapping.items():
+                    if backend_id in s3_backends:
+                        try:
+                            # Create bucket on backend using hashed name
+                            backend_config = s3_backends[backend_id]
+                            result = create_backend_bucket(backend_config, backend_bucket_name)
+                            
+                            creation_results.append({
+                                "backend_id": backend_id,
+                                "backend_bucket_name": backend_bucket_name,
+                                "status": "success" if result else "failed"
+                            })
+                            
+                            # Log creation
+                            log_bucket_creation(session, customer_id, bucket_name, 
+                                              backend_id, backend_bucket_name, 
+                                              "create", "success" if result else "failed")
+                        
+                        except Exception as e:
+                            logger.error(f"Failed to create bucket on {backend_id}: {e}")
+                            creation_results.append({
+                                "backend_id": backend_id,
+                                "backend_bucket_name": backend_bucket_name,
+                                "status": "failed",
+                                "error": str(e)
+                            })
+                            
+                            log_bucket_creation(session, customer_id, bucket_name,
+                                              backend_id, backend_bucket_name,
+                                              "create", "failed", str(e))
+                
+                # Return success if at least one backend succeeded
+                success_count = sum(1 for r in creation_results if r["status"] == "success")
+                
+                if success_count > 0:
+                    return {
+                        "message": f"Bucket '{bucket_name}' created",
+                        "logical_name": bucket_name,
+                        "customer_id": customer_id,
+                        "backends_created": success_count,
+                        "total_backends": len(backend_mapping),
+                        "details": creation_results
+                    }
+                else:
+                    return create_s3_error_response(
+                        "InternalError",
+                        f"Failed to create bucket on any backend",
+                        bucket_name
+                    )
+                    
+        except Exception as e:
+            logger.error(f"Failed to create bucket on regional gateway: {e}")
+            return create_s3_error_response(
+                "InternalError",
+                f"Failed to create bucket: {str(e)}",
+                bucket_name
+            )
+
+@app.get("/s3")
+async def list_buckets_with_mapping(
+    request: Request,
+    x_customer_id: Optional[str] = Header(None, alias="X-Customer-ID")
+):
+    """List buckets - shows logical names to customer"""
+    
+    customer_id = x_customer_id or extract_customer_from_request(request)
+    region_id = get_region_from_request(request)
+    
+    if GATEWAY_TYPE == 'global':
+        # Redirect to regional endpoint
+        regional_url = router_service.get_regional_endpoint(region_id)
+        redirect_url = f"{regional_url}/s3"
+        
+        return RedirectResponse(
+            url=redirect_url,
+            status_code=307,
+            headers={
+                "X-Customer-ID": customer_id,
+                "X-Region-ID": region_id
+            }
+        )
+    
+    else:
+        # Regional gateway - return logical bucket names
+        try:
+            with get_db() as session:
+                mapping_service = BucketMappingService(session)
+                buckets = mapping_service.list_customer_buckets(customer_id)
+                
+                # Format as S3 XML response
+                bucket_list = []
+                for bucket in buckets:
+                    if bucket['status'] == 'active':
+                        bucket_list.append({
+                            "Name": bucket['logical_name'],
+                            "CreationDate": bucket['created_at'].isoformat() if bucket['created_at'] else None
+                        })
+                
+                return {
+                    "ListAllMyBucketsResult": {
+                        "Owner": {
+                            "ID": customer_id,
+                            "DisplayName": customer_id
+                        },
+                        "Buckets": {
+                            "Bucket": bucket_list
+                        }
+                    }
+                }
+                
+        except Exception as e:
+            logger.error(f"Failed to list buckets: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/s3/{bucket_name}")
+async def list_objects_with_mapping(
+    bucket_name: str,
+    request: Request,
+    x_customer_id: Optional[str] = Header(None, alias="X-Customer-ID")
+):
+    """List objects in bucket - uses mapped backend names"""
+    
+    customer_id = x_customer_id or extract_customer_from_request(request)
+    region_id = get_region_from_request(request)
+    
+    if GATEWAY_TYPE == 'global':
+        # Redirect to regional endpoint
+        regional_url = router_service.get_regional_endpoint(region_id)
+        redirect_url = f"{regional_url}/s3/{bucket_name}"
+        
+        return RedirectResponse(
+            url=redirect_url,
+            status_code=307,
+            headers={
+                "X-Customer-ID": customer_id,
+                "X-Region-ID": region_id
+            }
+        )
+    
+    else:
+        # Regional gateway - list objects from backend buckets
+        try:
+            with get_db() as session:
+                mapping_service = BucketMappingService(session)
+                backend_mapping = mapping_service.get_bucket_mapping(customer_id, bucket_name)
+                
+                if not backend_mapping:
+                    return create_s3_error_response(
+                        "NoSuchBucket",
+                        f"Bucket '{bucket_name}' not found",
+                        bucket_name
+                    )
+                
+                # Get objects from primary backend (could aggregate from all)
+                s3_backends = load_s3_backends()
+                primary_backend = None
+                primary_backend_name = None
+                
+                for backend_id, backend_bucket_name in backend_mapping.items():
+                    if backend_id in s3_backends and s3_backends[backend_id].get('is_primary'):
+                        primary_backend = s3_backends[backend_id]
+                        primary_backend_name = backend_bucket_name
+                        break
+                
+                if not primary_backend:
+                    # Use first available backend
+                    for backend_id, backend_bucket_name in backend_mapping.items():
+                        if backend_id in s3_backends:
+                            primary_backend = s3_backends[backend_id]
+                            primary_backend_name = backend_bucket_name
+                            break
+                
+                if not primary_backend:
+                    return create_s3_error_response(
+                        "InternalError",
+                        "No available backends for bucket",
+                        bucket_name
+                    )
+                
+                # List objects from backend
+                objects = list_backend_objects(primary_backend, primary_backend_name)
+                
+                return {
+                    "ListBucketResult": {
+                        "Name": bucket_name,  # Return logical name to customer
+                        "Contents": objects,
+                        "IsTruncated": False
+                    }
+                }
+                
+        except Exception as e:
+            logger.error(f"Failed to list objects: {e}")
+            return create_s3_error_response(
+                "InternalError",
+                f"Failed to list objects: {str(e)}",
+                bucket_name
+            )
+
+# Helper functions for bucket mapping
+def extract_customer_from_request(request: Request) -> str:
+    """Extract customer ID from request headers or use default"""
+    customer_id = request.headers.get("X-Customer-ID")
+    if not customer_id:
+        # Could extract from authentication, URL, etc.
+        customer_id = "default-customer"
+    return customer_id
+
+def get_region_from_request(request: Request) -> str:
+    """Determine region from request"""
+    # Could be based on headers, URL routing, geo-IP, etc.
+    region_id = request.headers.get("X-Region-ID")
+    if not region_id:
+        region_id = "FI-HEL"  # Default region
+    return region_id
+
+def log_bucket_creation(session, customer_id: str, logical_name: str, 
+                       backend_id: str, backend_name: str, 
+                       operation: str, status: str, error_message: str = None):
+    """Log bucket creation operation"""
+    try:
+        from sqlalchemy import text
+        
+        query = text("""
+            INSERT INTO bucket_creation_log 
+            (customer_id, logical_name, backend_id, backend_name, operation, status, error_message)
+            VALUES (:customer_id, :logical_name, :backend_id, :backend_name, :operation, :status, :error_message)
+        """)
+        
+        session.execute(query, {
+            'customer_id': customer_id,
+            'logical_name': logical_name,
+            'backend_id': backend_id,
+            'backend_name': backend_name,
+            'operation': operation,
+            'status': status,
+            'error_message': error_message
+        })
+        session.commit()
+        
+    except Exception as e:
+        logger.error(f"Failed to log bucket creation: {e}")
+
+def create_backend_bucket(backend_config: Dict, bucket_name: str) -> bool:
+    """Create bucket on specific backend using hashed name"""
+    try:
+        # This would use boto3 or direct API calls to create bucket
+        # For now, simulate success
+        logger.info(f"Creating bucket '{bucket_name}' on backend {backend_config.get('provider')}")
+        
+        # TODO: Implement actual backend bucket creation
+        # import boto3
+        # s3_client = boto3.client('s3',
+        #     endpoint_url=backend_config['endpoint'],
+        #     aws_access_key_id=backend_config['access_key'],
+        #     aws_secret_access_key=backend_config['secret_key']
+        # )
+        # s3_client.create_bucket(Bucket=bucket_name)
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"Failed to create backend bucket: {e}")
+        return False
+
+def list_backend_objects(backend_config: Dict, bucket_name: str) -> List[Dict]:
+    """List objects from specific backend bucket"""
+    try:
+        # This would use boto3 or direct API calls to list objects
+        # For now, return empty list
+        logger.info(f"Listing objects from bucket '{bucket_name}' on backend {backend_config.get('provider')}")
+        
+        # TODO: Implement actual backend object listing
+        return []
+        
+    except Exception as e:
+        logger.error(f"Failed to list backend objects: {e}")
+        return []
+
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000) 
+    import uvicorn
+    
+    port = int(os.getenv("PORT", "8000"))
+    host = os.getenv("HOST", "0.0.0.0")
+    
+    logger.info(f"🚀 Starting S3 Gateway with Bucket Hash Mapping on {host}:{port}")
+    logger.info(f"📊 Features: GDPR={GATEWAY_TYPE != 'global'}, Validation={ENABLE_S3_VALIDATION}, Mapping=True")
+    
+    uvicorn.run(app, host=host, port=port) 

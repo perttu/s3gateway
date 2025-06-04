@@ -18,15 +18,103 @@ if ! curl -s http://localhost:8000/health > /dev/null; then
     exit 1
 fi
 
+# Test the bucket mapping module directly
+echo ""
+echo -e "${BLUE}🗺️ Testing Bucket Hash Mapping Module${NC}"
+echo "------------------------------------"
+
+echo "Running Python bucket mapping tests..."
+cd code/gateway
+python3 bucket_mapping.py
+echo ""
+
 # Test the validation module directly
 echo ""
 echo -e "${BLUE}📋 Testing S3 Validation Module Directly${NC}"
 echo "----------------------------------------"
 
 echo "Running Python validation tests..."
-cd code/gateway
 python3 s3_validation.py
 cd ../..
+
+echo ""
+echo -e "${BLUE}🧪 Testing Bucket Mapping API Endpoints${NC}"
+echo "--------------------------------------"
+
+# Test bucket mapping generation (no storage)
+echo ""
+echo "1. Testing bucket mapping generation:"
+mapping_response=$(curl -s -X POST "http://localhost:8000/api/bucket-mappings/test" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "customer_id": "test-customer-123",
+        "region_id": "FI-HEL",
+        "logical_name": "my-data-bucket"
+    }' 2>/dev/null)
+
+if echo "$mapping_response" | grep -q '"test": true'; then
+    echo -e "   ${GREEN}✅ SUCCESS${NC}: Bucket mapping generation works"
+    
+    # Extract backend mapping
+    spacetime_bucket=$(echo "$mapping_response" | grep -o '"spacetime": "[^"]*"' | cut -d'"' -f4)
+    upcloud_bucket=$(echo "$mapping_response" | grep -o '"upcloud": "[^"]*"' | cut -d'"' -f4)
+    hetzner_bucket=$(echo "$mapping_response" | grep -o '"hetzner": "[^"]*"' | cut -d'"' -f4)
+    
+    echo "   Generated mappings:"
+    echo "   • Logical name: my-data-bucket"
+    echo "   • Spacetime:   $spacetime_bucket"
+    echo "   • UpCloud:     $upcloud_bucket"
+    echo "   • Hetzner:     $hetzner_bucket"
+    
+    # Verify uniqueness
+    if [ "$spacetime_bucket" != "$upcloud_bucket" ] && [ "$spacetime_bucket" != "$hetzner_bucket" ] && [ "$upcloud_bucket" != "$hetzner_bucket" ]; then
+        echo -e "   ${GREEN}✅ UNIQUENESS${NC}: All backend names are different"
+    else
+        echo -e "   ${RED}❌ COLLISION${NC}: Some backend names are identical"
+    fi
+    
+    # Verify S3 compliance
+    if [[ "$spacetime_bucket" =~ ^[a-z0-9.-]+$ ]] && [ ${#spacetime_bucket} -ge 3 ] && [ ${#spacetime_bucket} -le 63 ]; then
+        echo -e "   ${GREEN}✅ S3 COMPLIANCE${NC}: Backend names follow S3 naming rules"
+    else
+        echo -e "   ${RED}❌ S3 VIOLATION${NC}: Backend names violate S3 naming rules"
+    fi
+else
+    echo -e "   ${RED}❌ FAILED${NC}: Bucket mapping generation failed"
+    echo "   Response: ${mapping_response:0:200}..."
+fi
+
+# Test different customers, same logical name
+echo ""
+echo "2. Testing same logical name, different customers:"
+customers=("customer-alpha" "customer-beta" "customer-gamma")
+logical_name="shared-bucket"
+
+mappings=()
+for customer in "${customers[@]}"; do
+    echo "   Testing customer: $customer"
+    response=$(curl -s -X POST "http://localhost:8000/api/bucket-mappings/test" \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"customer_id\": \"$customer\",
+            \"region_id\": \"FI-HEL\",
+            \"logical_name\": \"$logical_name\"
+        }" 2>/dev/null)
+    
+    spacetime_backend=$(echo "$response" | grep -o '"spacetime": "[^"]*"' | cut -d'"' -f4)
+    mappings+=("$spacetime_backend")
+    echo "     Spacetime backend: $spacetime_backend"
+done
+
+# Check uniqueness across customers
+unique_count=$(printf '%s\n' "${mappings[@]}" | sort -u | wc -l)
+total_count=${#mappings[@]}
+
+if [ "$unique_count" -eq "$total_count" ]; then
+    echo -e "   ${GREEN}✅ CUSTOMER ISOLATION${NC}: Different customers get unique backend names"
+else
+    echo -e "   ${RED}❌ CUSTOMER COLLISION${NC}: Some customers got identical backend names"
+fi
 
 echo ""
 echo -e "${BLUE}🌐 Testing Global Gateway Validation${NC}"
@@ -63,8 +151,8 @@ for bucket in "${test_bucket_names[@]}"; do
         echo "     Response: ${response:0:100}..."
     fi
     
-    # Test actual S3 endpoint (should redirect with validation)
-    echo "  Testing S3 endpoint redirect..."
+    # Test actual S3 endpoint with bucket mapping (should redirect with validation)
+    echo "  Testing S3 endpoint with bucket mapping..."
     s3_response=$(curl -s -w "HTTP_CODE:%{http_code}" -H "X-Customer-ID: test-customer" "http://localhost:8000/s3/$bucket" 2>/dev/null)
     
     http_code=$(echo "$s3_response" | grep -o 'HTTP_CODE:[0-9]*' | cut -d: -f2)
@@ -119,26 +207,41 @@ echo ""
 echo -e "${BLUE}🧪 Integration Tests${NC}"
 echo "-------------------"
 
-echo "Testing complete S3 workflow with validation..."
+echo "Testing complete S3 workflow with bucket mapping and validation..."
 
-# Test 1: Valid bucket and object
+# Test 1: Valid bucket with mapping
 echo ""
-echo "1. Testing valid bucket and object creation:"
+echo "1. Testing valid bucket creation with hash mapping:"
 valid_bucket="test-bucket-$(date +%s)"
 valid_object="documents/test-file.txt"
 
 echo "   Creating bucket: $valid_bucket"
-create_response=$(curl -s -w "HTTP_CODE:%{http_code}" -X PUT -H "X-Customer-ID: demo-customer" "http://localhost:8000/s3/$valid_bucket" 2>/dev/null)
+create_response=$(curl -s -w "HTTP_CODE:%{http_code}" -X PUT -H "X-Customer-ID: integration-test-customer" "http://localhost:8000/s3/$valid_bucket" 2>/dev/null)
 create_http_code=$(echo "$create_response" | grep -o 'HTTP_CODE:[0-9]*' | cut -d: -f2)
 
 case $create_http_code in
-    307) echo -e "   ${GREEN}✅ SUCCESS${NC}: Redirected to regional endpoint" ;;
+    307) 
+        echo -e "   ${GREEN}✅ SUCCESS${NC}: Redirected to regional endpoint"
+        
+        # Check if bucket mapping was created
+        sleep 1  # Give time for mapping creation
+        mapping_check=$(curl -s "http://localhost:8000/api/bucket-mappings/integration-test-customer/$valid_bucket" 2>/dev/null)
+        if echo "$mapping_check" | grep -q '"backend_mapping"'; then
+            echo -e "   ${GREEN}✅ MAPPING CREATED${NC}: Backend hash mapping stored in database"
+            
+            # Extract backend names
+            backend_mapping=$(echo "$mapping_check" | grep -o '"backend_mapping": {[^}]*}')
+            echo "   Backend mapping: $backend_mapping"
+        else
+            echo -e "   ${YELLOW}⚠️ MAPPING UNKNOWN${NC}: Could not verify mapping creation"
+        fi
+        ;;
     400) echo -e "   ${RED}❌ VALIDATION FAILED${NC}: Bucket name rejected" ;;
     *) echo -e "   ${YELLOW}⚠️ UNEXPECTED${NC}: HTTP $create_http_code" ;;
 esac
 
 echo "   Uploading object: $valid_object"
-upload_response=$(curl -s -w "HTTP_CODE:%{http_code}" -X PUT -H "X-Customer-ID: demo-customer" -d "Test content" "http://localhost:8000/s3/$valid_bucket/$valid_object" 2>/dev/null)
+upload_response=$(curl -s -w "HTTP_CODE:%{http_code}" -X PUT -H "X-Customer-ID: integration-test-customer" -d "Test content" "http://localhost:8000/s3/$valid_bucket/$valid_object" 2>/dev/null)
 upload_http_code=$(echo "$upload_response" | grep -o 'HTTP_CODE:[0-9]*' | cut -d: -f2)
 
 case $upload_http_code in
@@ -162,18 +265,46 @@ case $invalid_http_code in
     *) echo -e "   ${YELLOW}⚠️ UNEXPECTED${NC}: HTTP $invalid_http_code" ;;
 esac
 
-# Test 3: Check health endpoints
+# Test 3: List customer buckets with mappings
 echo ""
-echo "3. Testing health endpoints with validation status:"
+echo "3. Testing customer bucket listing with mappings:"
+echo "   Listing buckets for integration-test-customer..."
+bucket_list_response=$(curl -s "http://localhost:8000/api/bucket-mappings/integration-test-customer" 2>/dev/null)
+
+if echo "$bucket_list_response" | grep -q '"bucket_count"'; then
+    bucket_count=$(echo "$bucket_list_response" | grep -o '"bucket_count": [0-9]*' | cut -d: -f2 | tr -d ' ')
+    echo -e "   ${GREEN}✅ SUCCESS${NC}: Found $bucket_count bucket(s) for customer"
+    
+    if [ "$bucket_count" -gt 0 ]; then
+        echo "   Bucket details:"
+        echo "$bucket_list_response" | grep -o '"logical_name": "[^"]*"' | sed 's/.*: "//;s/"//' | while read bucket; do
+            echo "     • $bucket"
+        done
+    fi
+else
+    echo -e "   ${YELLOW}⚠️ UNKNOWN${NC}: Could not retrieve bucket list"
+fi
+
+# Test 4: Check health endpoints
+echo ""
+echo "4. Testing health endpoints with validation and mapping status:"
 
 echo "   Global gateway health:"
 global_health=$(curl -s "http://localhost:8000/health" 2>/dev/null)
 if echo "$global_health" | grep -q '"s3_validation"'; then
     validation_status=$(echo "$global_health" | grep -o '"enabled": [^,}]*' | head -1)
     strict_status=$(echo "$global_health" | grep -o '"strict_mode": [^,}]*' | head -1)
-    echo -e "   ${GREEN}✅ AVAILABLE${NC}: Validation $validation_status, Strict $strict_status"
+    echo -e "   ${GREEN}✅ VALIDATION${NC}: $validation_status, Strict $strict_status"
 else
     echo -e "   ${YELLOW}⚠️ NO VALIDATION INFO${NC}: Health endpoint may not include validation status"
+fi
+
+if echo "$global_health" | grep -q '"bucket_mapping"'; then
+    mapping_enabled=$(echo "$global_health" | grep -A3 '"bucket_mapping"' | grep '"enabled"' | cut -d: -f2 | tr -d ' ,')
+    mapping_algorithm=$(echo "$global_health" | grep -A3 '"bucket_mapping"' | grep '"algorithm"' | cut -d'"' -f4)
+    echo -e "   ${GREEN}✅ BUCKET MAPPING${NC}: Enabled=$mapping_enabled, Algorithm=$mapping_algorithm"
+else
+    echo -e "   ${YELLOW}⚠️ NO MAPPING INFO${NC}: Health endpoint may not include bucket mapping status"
 fi
 
 echo "   Regional gateway health:"
@@ -181,30 +312,35 @@ regional_health=$(curl -s "http://localhost:8001/health" 2>/dev/null)
 if echo "$regional_health" | grep -q '"s3_validation"'; then
     validation_status=$(echo "$regional_health" | grep -o '"enabled": [^,}]*' | head -1)
     strict_status=$(echo "$regional_health" | grep -o '"strict_mode": [^,}]*' | head -1)
-    echo -e "   ${GREEN}✅ AVAILABLE${NC}: Validation $validation_status, Strict $strict_status"
+    echo -e "   ${GREEN}✅ VALIDATION${NC}: $validation_status, Strict $strict_status"
 else
     echo -e "   ${YELLOW}⚠️ NO VALIDATION INFO${NC}: Health endpoint may not include validation status"
 fi
 
 echo ""
-echo -e "${GREEN}🎯 S3 Validation Test Summary${NC}"
-echo "============================"
+echo -e "${GREEN}🎯 S3 Gateway Test Summary${NC}"
+echo "=========================="
 echo ""
-echo "✅ Benefits of S3 Validation:"
-echo "• Prevents backend creation failures due to invalid names"
-echo "• Validates both bucket names and object keys"
-echo "• Provides clear error messages in S3-compatible XML format"
-echo "• Supports both standard and strict validation modes"
-echo "• Integrates with GDPR-compliant routing architecture"
+echo "✅ Features Tested:"
+echo "• S3 RFC-compliant bucket name validation"
+echo "• S3 RFC-compliant object key validation"
+echo "• Bucket hash mapping for namespace collision avoidance"
+echo "• Customer isolation through deterministic hashing"
+echo "• GDPR-compliant HTTP redirects (global → regional)"
+echo "• Multi-backend replication support"
+echo ""
+echo "🗺️ Bucket Hash Mapping Benefits:"
+echo "• Unique backend names across all customers and providers"
+echo "• Solves S3 global namespace collision problem"
+echo "• Enables true multi-backend replication"
+echo "• Customer only sees logical names"
+echo "• Deterministic generation (same input = same output)"
 echo ""
 echo "🔧 Configuration:"
-echo "• Enable with ENABLE_S3_VALIDATION=true"
-echo "• Strict mode with S3_VALIDATION_STRICT=true"
-echo "• Test endpoint: /validation/test"
-echo ""
-echo "📚 Validation Rules:"
-echo "• Bucket names: 3-63 chars, lowercase, no consecutive dots, no IP format"
-echo "• Object keys: max 1024 bytes, UTF-8 safe, optional strict character filtering"
+echo "• Enable validation: ENABLE_S3_VALIDATION=true"
+echo "• Strict mode: S3_VALIDATION_STRICT=true"
+echo "• Bucket mapping: Always enabled"
+echo "• Test endpoints: /validation/test, /api/bucket-mappings/test"
 echo ""
 
 # Check if services are running
