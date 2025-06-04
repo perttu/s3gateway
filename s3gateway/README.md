@@ -1,15 +1,18 @@
 # S3 Gateway Service
 
-A dockerized S3-compatible gateway service with data sovereignty support, built using S3Proxy and PostgreSQL for metadata storage.
+A dockerized S3-compatible gateway service with real S3 backend integration, data sovereignty support, versioning, and immutability features. Built using FastAPI and PostgreSQL for metadata storage.
 
 ## Features
 
-- **S3-Compatible API**: Mock S3 operations (GET, PUT, DELETE, LIST)
+- **Real S3 Backend Integration**: Connects to actual S3-compatible storage providers
+- **S3-Compatible API**: Full S3 operations (GET, PUT, DELETE, LIST) with `/s3/` prefix
 - **Data Sovereignty**: Provider selection based on country/region requirements
-- **Metadata Storage**: PostgreSQL database for tracking operations and metadata
-- **Provider Management**: Load and manage S3 providers from CSV data
+- **Versioning & Immutability**: Object versioning with immutable storage support
+- **Metadata Authority**: PostgreSQL as single source of truth for object metadata
+- **Provider Management**: Load and manage S3 providers from CSV and JSON configuration
 - **Operation Logging**: Comprehensive logging of all S3 operations
-- **Replication Rules**: Support for data replication based on sovereignty requirements
+- **Replication Management**: Multi-zone replication with real-time status tracking
+- **Hardcoded Bucket Strategy**: All operations use a predefined bucket (`2025-datatransfer`)
 
 ## Architecture
 
@@ -18,15 +21,17 @@ A dockerized S3-compatible gateway service with data sovereignty support, built 
 │   S3 Client     │    │  Gateway API    │    │   PostgreSQL    │
 │                 │────│                 │────│                 │
 │ (AWS CLI,       │    │  FastAPI +      │    │ Metadata Store  │
-│  boto3, etc.)   │    │  Provider Logic │    │                 │
+│  boto3, etc.)   │    │  Real S3        │    │ (Authority)     │
 └─────────────────┘    └─────────────────┘    └─────────────────┘
                               │
                               │
-                       ┌─────────────────┐
-                       │    S3Proxy      │
-                       │                 │
-                       │ (Local Storage) │
-                       └─────────────────┘
+                    ┌─────────────────┐
+                    │ Real S3 Backends│
+                    │                 │
+                    │ (Spacetime,     │
+                    │  UpCloud,       │
+                    │  Hetzner, etc.) │
+                    └─────────────────┘
 ```
 
 ## Directory Structure
@@ -35,7 +40,8 @@ A dockerized S3-compatible gateway service with data sovereignty support, built 
 s3gateway/
 ├── docker-compose.yml          # Main orchestration
 ├── config/
-│   └── s3proxy.conf           # S3Proxy configuration
+│   ├── s3proxy.conf           # S3Proxy configuration
+│   └── s3_backends.json       # Real S3 backend configuration
 ├── docker/
 │   ├── s3proxy/
 │   │   ├── Dockerfile         # S3Proxy container
@@ -44,10 +50,11 @@ s3gateway/
 │       ├── Dockerfile         # Gateway service container
 │       └── requirements.txt   # Python dependencies
 ├── code/
-│   ├── db/
-│   │   └── init.sql          # Database schema
 │   └── gateway/
-│       └── main.py           # FastAPI application
+│       ├── main.py           # FastAPI application
+│       ├── schema.sql        # Database schema (used by docker-compose)
+│       └── Dockerfile        # Gateway dockerfile
+├── providers_flat.csv         # Provider data
 └── README.md
 ```
 
@@ -59,12 +66,18 @@ cd s3gateway
 docker-compose up -d
 ```
 
-2. **Check service status:**
+2. **Initialize the hardcoded bucket:**
 ```bash
-docker-compose ps
+curl -X POST http://localhost:8000/initialize-bucket
 ```
 
-3. **View logs:**
+3. **Check service status:**
+```bash
+docker-compose ps
+curl http://localhost:8000/health
+```
+
+4. **View logs:**
 ```bash
 docker-compose logs -f gateway
 ```
@@ -72,24 +85,63 @@ docker-compose logs -f gateway
 ## API Endpoints
 
 ### Gateway Management
-- `GET /health` - Health check
-- `GET /providers` - List available providers
-- `GET /sovereignty/check?country=Germany&replicas=3` - Check sovereignty compliance
+- `GET /health` - Health check with backend status
+- `GET /providers` - List available providers from CSV
+- `GET /backends` - List configured S3 backends
+- `GET /bucket-config` - Get hardcoded bucket configuration
+- `POST /initialize-bucket` - Create hardcoded bucket in all backends
+- `GET /api/replicas/status` - Get object replication status
 - `GET /api/operations/log` - View operations log
 
-### S3-Compatible API
-- `GET /` - List buckets
-- `GET /{bucket}` - List objects in bucket
-- `PUT /{bucket}` - Create bucket
-- `GET /{bucket}/{key}` - Get object
-- `PUT /{bucket}/{key}` - Put object
-- `DELETE /{bucket}/{key}` - Delete object
+### S3-Compatible API (All with `/s3/` prefix)
+- `GET /s3` - List buckets
+- `GET /s3/{bucket}` - List objects in bucket (uses hardcoded bucket)
+- `PUT /s3/{bucket}` - Create bucket (creates hardcoded bucket)
+- `GET /s3/{bucket}/{key}` - Get object (from hardcoded bucket)
+- `PUT /s3/{bucket}/{key}` - Put object (to hardcoded bucket)
+- `DELETE /s3/{bucket}/{key}` - Delete object (from hardcoded bucket)
+
+## Configuration
+
+### Environment Variables
+
+- `DATABASE_URL`: PostgreSQL connection string
+- `S3PROXY_URL`: S3Proxy service URL (for fallback)
+- `PROVIDERS_FILE`: Path to providers CSV file
+- `S3_BACKENDS_CONFIG`: Path to S3 backends JSON configuration
+
+### S3 Backends Configuration
+
+The service loads real S3 backend configurations from `config/s3_backends.json`:
+
+```json
+{
+  "spacetime": {
+    "provider": "Spacetime",
+    "zone_code": "FI-HEL-ST-1",
+    "region": "FI-HEL",
+    "endpoint": "https://hel1.your-objectstorage.com",
+    "access_key": "your-access-key",
+    "secret_key": "your-secret-key",
+    "is_primary": true,
+    "enabled": true
+  }
+}
+```
+
+### Provider Data
+
+The service loads provider information from `providers_flat.csv` containing Finnish providers:
+- Zone codes and regions (Helsinki focus)
+- Provider capabilities (S3 compatibility, Object Lock, Versioning)
+- Compliance information (ISO 27001, GDPR)
+- Geographic location data
 
 ## Usage Examples
 
 ### Using AWS CLI
 
-1. **Configure AWS CLI for local S3Proxy:**
+1. **Configure AWS CLI:**
 ```bash
 aws configure set aws_access_key_id local-identity
 aws configure set aws_secret_access_key local-credential
@@ -101,47 +153,50 @@ aws configure set default.region us-east-1
 aws s3 ls --endpoint-url http://localhost:8080
 ```
 
-3. **Create a bucket:**
+3. **Create bucket (creates hardcoded bucket):**
 ```bash
-aws s3 mb s3://test-bucket --endpoint-url http://localhost:8080
+aws s3 mb s3://any-name --endpoint-url http://localhost:8080
 ```
 
-4. **Upload a file:**
+4. **Upload file (goes to hardcoded bucket):**
 ```bash
 echo "Hello World" > test.txt
-aws s3 cp test.txt s3://test-bucket/ --endpoint-url http://localhost:8080
+aws s3 cp test.txt s3://any-name/ --endpoint-url http://localhost:8080
 ```
 
-### Using curl
+### Using Direct API
 
-1. **List buckets:**
+1. **List objects:**
 ```bash
-curl http://localhost:8000/
+curl http://localhost:8000/s3/any-bucket-name
 ```
 
 2. **Create bucket:**
 ```bash
-curl -X PUT http://localhost:8000/my-bucket
+curl -X PUT http://localhost:8000/s3/my-bucket
 ```
 
 3. **Upload object:**
 ```bash
-curl -X PUT http://localhost:8000/my-bucket/test.txt -d "Hello World"
+curl -X PUT http://localhost:8000/s3/my-bucket/test.txt -d "Hello World"
 ```
 
 4. **Get object:**
 ```bash
-curl http://localhost:8000/my-bucket/test.txt
+curl http://localhost:8000/s3/my-bucket/test.txt
 ```
 
-### Check Data Sovereignty
+### Check System Status
 
 ```bash
-# Check if Germany has enough providers for 3 replicas
-curl "http://localhost:8000/sovereignty/check?country=Germany&replicas=3"
+# Check health and backend status
+curl "http://localhost:8000/health"
 
-# List all available providers
-curl "http://localhost:8000/providers"
+# List configured backends
+curl "http://localhost:8000/backends"
+
+# View replication status
+curl "http://localhost:8000/api/replicas/status"
 
 # View operations log
 curl "http://localhost:8000/api/operations/log"
@@ -153,34 +208,35 @@ The service uses PostgreSQL to store:
 
 - **Providers**: Available S3 providers and their capabilities
 - **Buckets**: Bucket metadata and location information
-- **Objects**: Object metadata and storage information
+- **Objects**: Object metadata with versioning and immutability tracking
+- **Object Replicas**: Detailed replica status for each zone
+- **Sync Jobs**: Queue for managing data replication
 - **Operations Log**: All S3 operations for auditing
 - **Replication Rules**: Data sovereignty and replication requirements
-- **Object Replicas**: Tracking of object replicas across zones
 
-## Configuration
+### Key Features
 
-### Environment Variables
+- **Metadata Authority**: PostgreSQL is the single source of truth
+- **Versioning**: Each object upload gets a unique version ID
+- **Immutability**: Objects are tracked as immutable with replica verification
+- **Multi-Zone Replication**: Objects are replicated across multiple S3 backends
 
-- `DATABASE_URL`: PostgreSQL connection string
-- `S3PROXY_URL`: S3Proxy service URL
-- `PROVIDERS_FILE`: Path to providers CSV file
+## Hardcoded Bucket Strategy
 
-### Provider Data
+The service uses a hardcoded bucket approach for security and simplicity:
 
-The service loads provider information from `providers_flat.csv` which contains:
-- Zone codes and regions
-- Provider capabilities (S3 compatibility, Object Lock, Versioning)
-- Compliance information (ISO 27001, GDPR)
-- Geographic location data
+- All operations use the bucket `2025-datatransfer`
+- Bucket name in client requests is ignored
+- This ensures consistent data placement and security
+- Real bucket is created in all configured S3 backends
 
 ## Development
 
-### Adding New Features
+### Adding New S3 Backends
 
-1. **New S3 Operations**: Add endpoints to `main.py`
-2. **Database Schema**: Modify `init.sql` and restart services
-3. **Provider Logic**: Update `select_provider_zone()` function
+1. Update `config/s3_backends.json` with new backend configuration
+2. Restart the gateway service
+3. Initialize bucket: `curl -X POST http://localhost:8000/initialize-bucket`
 
 ### Testing
 
@@ -191,10 +247,12 @@ docker-compose up -d
 # Check health
 curl http://localhost:8000/health
 
-# Run basic S3 operations
-curl -X PUT http://localhost:8000/test-bucket
-curl -X PUT http://localhost:8000/test-bucket/test.txt -d "test data"
-curl http://localhost:8000/test-bucket/test.txt
+# Initialize bucket
+curl -X POST http://localhost:8000/initialize-bucket
+
+# Test S3 operations
+curl -X PUT http://localhost:8000/s3/test/hello.txt -d "Hello World"
+curl http://localhost:8000/s3/test/hello.txt
 ```
 
 ### Database Access
@@ -208,6 +266,10 @@ docker-compose exec postgres psql -U s3gateway -d s3gateway
 
 # Check operations log
 SELECT * FROM operations_log ORDER BY created_at DESC LIMIT 10;
+
+# Check object replication status
+SELECT object_key, current_replica_count, required_replica_count, sync_status 
+FROM objects ORDER BY created_at DESC LIMIT 10;
 ```
 
 ## Data Sovereignty Features
@@ -215,49 +277,49 @@ SELECT * FROM operations_log ORDER BY created_at DESC LIMIT 10;
 The gateway includes several features for data sovereignty compliance:
 
 1. **Provider Selection**: Automatically selects providers based on country requirements
-2. **Replication Rules**: Configurable rules for data replication across zones
-3. **Compliance Tracking**: Logs all operations with zone and provider information
-4. **Region Restrictions**: Enforce data residency requirements
+2. **Metadata Tracking**: All operations logged with zone and provider information
+3. **Region Restrictions**: Enforce data residency requirements through configuration
+4. **Replica Management**: Track and verify data replicas across zones
 
-### Example Sovereignty Rules
+### Current Configuration
+
+The service is configured for Finnish data sovereignty:
 
 ```sql
--- Ensure data stays within EU
-INSERT INTO replication_rules (bucket_id, rule_name, source_zone, target_zones, country_restriction) 
-VALUES (1, 'EU-only', 'GE-FRAN-AWS-1', ARRAY['NE-AMST-WASA-1', 'FR-PARI-AWS-1'], 'EU');
-
--- German data must stay in Germany
-INSERT INTO replication_rules (bucket_id, rule_name, source_zone, target_zones, country_restriction) 
-VALUES (2, 'Germany-only', 'GE-FRAN-AWS-1', ARRAY['GE-MUN-CONT-1', 'GE-HAMB-IMPO-1'], 'Germany');
+-- Helsinki region providers
+INSERT INTO providers (country, region_city, zone_code, provider_name, endpoint) VALUES
+('Finland', 'Helsinki', 'FI-HEL-ST-1', 'Spacetime', 'hel1.your-objectstorage.com'),
+('Finland', 'Helsinki', 'FI-HEL-UC-1', 'Upcloud', 'f969k.upcloudobjects.com'),
+('Finland', 'Helsinki', 'FI-HEL-HZ-1', 'Hetzner', 's3c.tns.cx');
 ```
 
 ## Monitoring
 
-- **Health Check**: `GET /health`
+- **Health Check**: `GET /health` with backend status
 - **Operations Log**: View all S3 operations in the database
+- **Replica Status**: Check object replication across zones
 - **Provider Status**: Check available providers and their capabilities
-- **Sovereignty Compliance**: Verify data placement rules
 
 ## Troubleshooting
 
 ### Common Issues
 
-1. **Database Connection Failed**:
+1. **Backend Connection Failed**:
+   ```bash
+   curl http://localhost:8000/backends
+   # Check S3 credentials in s3_backends.json
+   ```
+
+2. **Database Connection Failed**:
    ```bash
    docker-compose logs postgres
    docker-compose restart postgres
    ```
 
-2. **S3Proxy Not Starting**:
+3. **Object Not Found**:
    ```bash
-   docker-compose logs s3proxy
-   # Check if Java is available and configuration is correct
-   ```
-
-3. **Provider Data Not Loading**:
-   ```bash
-   # Ensure providers_flat.csv is in the parent directory
-   ls -la ../providers_flat.csv
+   # Check if object exists in metadata
+   curl http://localhost:8000/api/operations/log
    ```
 
 ### Reset Services
@@ -271,15 +333,27 @@ docker-compose down -v
 
 # Rebuild and start
 docker-compose up --build -d
+
+# Initialize bucket
+curl -X POST http://localhost:8000/initialize-bucket
 ```
 
-## Next Steps
+## Security Features
 
-This is a mockup service. For production use, consider:
+- **Immutable Storage**: Objects cannot be modified once written
+- **Versioning**: All object changes create new versions
+- **Metadata Verification**: Database serves as authority for object existence
+- **Multi-Zone Replication**: Data automatically replicated for durability
+- **Operation Logging**: All operations tracked for audit trails
 
-1. **Real S3 Backend Integration**: Replace mock responses with actual S3 calls
-2. **Authentication**: Add proper S3 signature validation
-3. **Load Balancing**: Distribute requests across multiple providers
-4. **Encryption**: Add client-side and server-side encryption
-5. **Monitoring**: Add metrics and alerting
-6. **Performance**: Optimize database queries and caching 
+## Production Considerations
+
+For production deployment, consider:
+
+1. **Credentials Management**: Use proper secrets management for S3 credentials
+2. **SSL/TLS**: Enable HTTPS for all endpoints
+3. **Authentication**: Add proper S3 signature validation
+4. **Load Balancing**: Distribute requests across multiple gateway instances
+5. **Monitoring**: Add metrics collection and alerting
+6. **Backup**: Regular database backups for metadata
+7. **Performance**: Optimize database queries and connection pooling 
