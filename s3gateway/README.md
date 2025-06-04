@@ -104,24 +104,27 @@ docker-compose logs -f
 ./demo-gdpr-compliance.sh
 ```
 
+6. **Bucket mapping demo:**
+```bash
+./demo-bucket-mapping.sh
+```
+
 ## API Endpoints
 
 ### Gateway Management
 - `GET /health` - Health check with backend status
 - `GET /providers` - List available providers from CSV
 - `GET /backends` - List configured S3 backends
-- `GET /bucket-config` - Get hardcoded bucket configuration
-- `POST /initialize-bucket` - Create hardcoded bucket in all backends
 - `GET /api/replicas/status` - Get object replication status
 - `GET /api/operations/log` - View operations log
 
 ### S3-Compatible API (All with `/s3/` prefix)
-- `GET /s3` - List buckets
-- `GET /s3/{bucket}` - List objects in bucket (uses hardcoded bucket)
-- `PUT /s3/{bucket}` - Create bucket (creates hardcoded bucket)
-- `GET /s3/{bucket}/{key}` - Get object (from hardcoded bucket)
-- `PUT /s3/{bucket}/{key}` - Put object (to hardcoded bucket)
-- `DELETE /s3/{bucket}/{key}` - Delete object (from hardcoded bucket)
+- `GET /s3` - List buckets (shows logical names to customers)
+- `PUT /s3/{bucket}` - Create bucket (creates hash-mapped backend buckets)
+- `GET /s3/{bucket}` - List objects in bucket
+- `GET /s3/{bucket}/{key}` - Get object
+- `PUT /s3/{bucket}/{key}` - Put object
+- `DELETE /s3/{bucket}/{key}` - Delete object
 
 ### Bucket Hash Mapping API
 - `GET /api/bucket-mappings/{customer_id}` - List customer bucket mappings
@@ -175,42 +178,53 @@ aws configure set aws_secret_access_key local-credential
 aws configure set default.region us-east-1
 ```
 
-2. **List buckets:**
+2. **Create bucket:**
+```bash
+aws s3 mb s3://my-data-bucket --endpoint-url http://localhost:8080
+```
+
+3. **List buckets:**
 ```bash
 aws s3 ls --endpoint-url http://localhost:8080
 ```
 
-3. **Create bucket (creates hardcoded bucket):**
-```bash
-aws s3 mb s3://any-name --endpoint-url http://localhost:8080
-```
-
-4. **Upload file (goes to hardcoded bucket):**
+4. **Upload file:**
 ```bash
 echo "Hello World" > test.txt
-aws s3 cp test.txt s3://any-name/ --endpoint-url http://localhost:8080
+aws s3 cp test.txt s3://my-data-bucket/ --endpoint-url http://localhost:8080
+```
+
+5. **List objects:**
+```bash
+aws s3 ls s3://my-data-bucket/ --endpoint-url http://localhost:8080
 ```
 
 ### Using Direct API
 
-1. **List objects:**
+1. **Create bucket:**
 ```bash
-curl http://localhost:8000/s3/any-bucket-name
+curl -X PUT -H "X-Customer-ID: my-company" "http://localhost:8000/s3/my-data-bucket"
 ```
 
-2. **Create bucket:**
+2. **List buckets:**
 ```bash
-curl -X PUT http://localhost:8000/s3/my-bucket
+curl -H "X-Customer-ID: my-company" "http://localhost:8000/s3"
 ```
 
 3. **Upload object:**
 ```bash
-curl -X PUT http://localhost:8000/s3/my-bucket/test.txt -d "Hello World"
+curl -X PUT -H "X-Customer-ID: my-company" \
+  -d "Hello World" "http://localhost:8000/s3/my-data-bucket/documents/test.txt"
 ```
 
 4. **Get object:**
 ```bash
-curl http://localhost:8000/s3/my-bucket/test.txt
+curl -H "X-Customer-ID: my-company" "http://localhost:8000/s3/my-data-bucket/documents/test.txt"
+```
+
+5. **List objects:**
+```bash
+curl -H "X-Customer-ID: my-company" "http://localhost:8000/s3/my-data-bucket"
 ```
 
 ### Check System Status
@@ -221,6 +235,14 @@ curl "http://localhost:8000/health"
 
 # List configured backends
 curl "http://localhost:8000/backends"
+
+# Test bucket mapping generation
+curl -X POST "http://localhost:8000/api/bucket-mappings/test" \
+  -H "Content-Type: application/json" \
+  -d '{"customer_id": "test-customer", "region_id": "FI-HEL", "logical_name": "test-bucket"}'
+
+# List customer bucket mappings
+curl "http://localhost:8000/api/bucket-mappings/test-customer"
 
 # View replication status
 curl "http://localhost:8000/api/replicas/status"
@@ -250,40 +272,6 @@ The service uses PostgreSQL to store:
 - **Multi-Zone Replication**: Objects are replicated across multiple S3 backends
 - **Bucket Hash Mapping**: Solves S3 global namespace collisions with deterministic hashing
 
-## Hardcoded Bucket Strategy
-
-The service uses a hardcoded bucket approach for security and simplicity:
-
-- All operations use the bucket `2025-datatransfer`
-- Bucket name in client requests is ignored
-- This ensures consistent data placement and security
-- Real bucket is created in all configured S3 backends
-
-## Development
-
-### Adding New S3 Backends
-
-1. Update `config/s3_backends.json` with new backend configuration
-2. Restart the gateway service
-3. Initialize bucket: `curl -X POST http://localhost:8000/initialize-bucket`
-
-### Testing
-
-```bash
-# Start services
-docker-compose up -d
-
-# Check health
-curl http://localhost:8000/health
-
-# Initialize bucket
-curl -X POST http://localhost:8000/initialize-bucket
-
-# Test S3 operations
-curl -X PUT http://localhost:8000/s3/test/hello.txt -d "Hello World"
-curl http://localhost:8000/s3/test/hello.txt
-```
-
 ### Database Access
 
 ```bash
@@ -295,6 +283,14 @@ docker-compose exec postgres psql -U s3gateway -d s3gateway
 
 # Check operations log
 SELECT * FROM operations_log ORDER BY created_at DESC LIMIT 10;
+
+# Check bucket mappings
+SELECT customer_id, logical_name, backend_mapping 
+FROM bucket_mappings ORDER BY created_at DESC LIMIT 10;
+
+# Check backend bucket names
+SELECT customer_id, logical_name, backend_id, backend_name 
+FROM backend_bucket_names ORDER BY created_at DESC LIMIT 10;
 
 # Check object replication status
 SELECT object_key, current_replica_count, required_replica_count, sync_status 
@@ -534,6 +530,40 @@ Three customers can all use logical name "data-backup":
 
 All backend names are globally unique while customers use identical logical names.
 
+## Development
+
+### Adding New S3 Backends
+
+1. Update `config/s3_backends.json` with new backend configuration
+2. Restart the gateway service
+3. Test with bucket creation: `curl -X PUT -H "X-Customer-ID: test" http://localhost:8000/s3/test-bucket`
+
+### Testing
+
+```bash
+# Start services
+docker-compose up -d
+
+# Check health
+curl http://localhost:8000/health
+
+# Create a test bucket with hash mapping
+curl -X PUT -H "X-Customer-ID: test-customer" http://localhost:8000/s3/test-bucket
+
+# Upload test object
+curl -X PUT -H "X-Customer-ID: test-customer" \
+  -d "Hello World" http://localhost:8000/s3/test-bucket/hello.txt
+
+# Get test object
+curl -H "X-Customer-ID: test-customer" http://localhost:8000/s3/test-bucket/hello.txt
+
+# List objects in bucket
+curl -H "X-Customer-ID: test-customer" http://localhost:8000/s3/test-bucket
+
+# Check bucket mapping
+curl "http://localhost:8000/api/bucket-mappings/test-customer/test-bucket"
+```
+
 ## Conclusion
 
 You now have a complete S3 gateway with:
@@ -552,4 +582,31 @@ Start testing with:
 ```bash
 ./start.sh
 ./test.sh
-``` 
+```
+
+## Workflow
+
+The S3 gateway follows standard S3 workflow with bucket hash mapping:
+
+1. **Create bucket** (generates hash mapping):
+   ```bash
+   curl -X PUT -H "X-Customer-ID: my-company" http://localhost:8000/s3/my-data-bucket
+   ```
+
+2. **Upload objects** (to existing bucket):
+   ```bash
+   curl -X PUT -H "X-Customer-ID: my-company" \
+     -d "Hello World" http://localhost:8000/s3/my-data-bucket/documents/file.txt
+   ```
+
+3. **List objects**:
+   ```bash
+   curl -H "X-Customer-ID: my-company" http://localhost:8000/s3/my-data-bucket
+   ```
+
+4. **View bucket mapping**:
+   ```bash
+   curl http://localhost:8000/api/bucket-mappings/my-company/my-data-bucket
+   ```
+
+Behind the scenes: Customer sees `my-data-bucket`, but backends get unique names like `s3gw-a1b2c3d4-spacetim`, solving S3's global namespace collision problem. 

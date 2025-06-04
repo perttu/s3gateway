@@ -49,7 +49,6 @@ GLOBAL_DATABASE_URL = os.getenv("GLOBAL_DATABASE_URL")
 S3PROXY_URL = os.getenv("S3PROXY_URL", "http://localhost:8080")
 PROVIDERS_FILE = os.getenv("PROVIDERS_FILE", "/app/providers_flat.csv")
 S3_BACKENDS_CONFIG = os.getenv("S3_BACKENDS_CONFIG", "/app/config/s3_backends.json")
-HARDCODED_BUCKET = "2025-datatransfer"
 
 # Database setup
 engine = create_engine(DATABASE_URL)

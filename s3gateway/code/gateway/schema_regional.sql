@@ -487,14 +487,26 @@ INSERT INTO customers (customer_id, customer_name, region_id, country, data_resi
 ('demo-customer', 'Demo Corporation', 'FI-HEL', 'Finland', 'strict', '["GDPR", "Finnish_Data_Protection_Act"]', 'contact@demo.com', 'compliance@demo.com', NOW() + INTERVAL '6 months'),
 ('acme-corp-fi', 'Acme Corp Finland', 'FI-HEL', 'Finland', 'strict', '["GDPR", "Finnish_Data_Protection_Act", "ISO_27001"]', 'contact@acme.fi', 'gdpr@acme.fi', NOW() + INTERVAL '3 months');
 
--- Demo bucket
+-- Demo bucket mapping
+INSERT INTO bucket_mappings (customer_id, region_id, logical_name, backend_mapping, status) VALUES
+('demo-customer', 'FI-HEL', 'demo-data', 
+ '{"spacetime": "s3gw-1a9d109ab3a69791-spacetim", "upcloud": "s3gw-3f6a685e1c37e3f1-upcloud", "hetzner": "s3gw-8e914841c68f8144-hetzner"}', 
+ 'active');
+
+-- Demo backend bucket names
+INSERT INTO backend_bucket_names (customer_id, logical_name, backend_id, backend_name, region_id) VALUES
+('demo-customer', 'demo-data', 'spacetime', 's3gw-1a9d109ab3a69791-spacetim', 'FI-HEL'),
+('demo-customer', 'demo-data', 'upcloud', 's3gw-3f6a685e1c37e3f1-upcloud', 'FI-HEL'),
+('demo-customer', 'demo-data', 'hetzner', 's3gw-8e914841c68f8144-hetzner', 'FI-HEL');
+
+-- Demo bucket (using logical name)
 INSERT INTO buckets (customer_id, bucket_name, region_id, versioning_enabled, object_lock_enabled, replication_policy) VALUES
-('demo-customer', '2025-datatransfer', 'FI-HEL', true, true, 
+('demo-customer', 'demo-data', 'FI-HEL', true, true, 
  '{"required_replicas": 2, "allowed_providers": ["FI-HEL-ST-1", "FI-HEL-UC-1", "FI-HEL-HZ-1"]}');
 
--- Demo object
+-- Demo object (in the logical bucket)
 INSERT INTO object_metadata (customer_id, bucket_name, object_key, version_id, size_bytes, etag, content_type, region_id, replicas, required_replica_count, current_replica_count, sync_status) VALUES
-('demo-customer', '2025-datatransfer', 'test-file.txt', 'v1-2024-01-01', 1024, '"d41d8cd98f00b204e9800998ecf8427e"', 'text/plain', 'FI-HEL',
+('demo-customer', 'demo-data', 'test-file.txt', 'v1-2024-01-01', 1024, '"d41d8cd98f00b204e9800998ecf8427e"', 'text/plain', 'FI-HEL',
  '[{"provider_id": "FI-HEL-ST-1", "status": "active", "version": "v1", "sync_time": "2024-01-01T00:00:00Z"}, {"provider_id": "FI-HEL-UC-1", "status": "active", "version": "v1", "sync_time": "2024-01-01T00:00:00Z"}]',
  2, 2, 'complete');
 

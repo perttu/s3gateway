@@ -224,7 +224,7 @@ case $create_http_code in
         echo -e "   ${GREEN}✅ SUCCESS${NC}: Redirected to regional endpoint"
         
         # Check if bucket mapping was created
-        sleep 1  # Give time for mapping creation
+        sleep 2  # Give time for mapping creation and redirect processing
         mapping_check=$(curl -s "http://localhost:8000/api/bucket-mappings/integration-test-customer/$valid_bucket" 2>/dev/null)
         if echo "$mapping_check" | grep -q '"backend_mapping"'; then
             echo -e "   ${GREEN}✅ MAPPING CREATED${NC}: Backend hash mapping stored in database"
@@ -235,19 +235,43 @@ case $create_http_code in
         else
             echo -e "   ${YELLOW}⚠️ MAPPING UNKNOWN${NC}: Could not verify mapping creation"
         fi
+        
+        # Test that we can now upload to this bucket
+        echo "   Testing object upload to created bucket..."
+        upload_test_response=$(curl -s -w "HTTP_CODE:%{http_code}" -X PUT \
+            -H "X-Customer-ID: integration-test-customer" \
+            -H "Content-Type: text/plain" \
+            -d "Test content for hash-mapped bucket" \
+            "http://localhost:8000/s3/$valid_bucket/$valid_object" 2>/dev/null)
+        upload_test_http_code=$(echo "$upload_test_response" | grep -o 'HTTP_CODE:[0-9]*' | cut -d: -f2)
+        
+        case $upload_test_http_code in
+            307) echo -e "   ${GREEN}✅ UPLOAD SUCCESS${NC}: File uploaded to hash-mapped bucket" ;;
+            400) echo -e "   ${RED}❌ UPLOAD FAILED${NC}: Validation error on upload" ;;
+            404) echo -e "   ${YELLOW}⚠️ BUCKET NOT FOUND${NC}: Bucket may not be properly created" ;;
+            *) echo -e "   ${YELLOW}⚠️ UNEXPECTED${NC}: HTTP $upload_test_http_code" ;;
+        esac
+        ;;
+    200) 
+        echo -e "   ${GREEN}✅ BUCKET CREATED${NC}: Created directly on regional endpoint"
+        
+        # Test object upload
+        echo "   Testing object upload..."
+        upload_response=$(curl -s -w "HTTP_CODE:%{http_code}" -X PUT \
+            -H "X-Customer-ID: integration-test-customer" \
+            -H "Content-Type: text/plain" \
+            -d "Test content" \
+            "http://localhost:8000/s3/$valid_bucket/$valid_object" 2>/dev/null)
+        upload_http_code=$(echo "$upload_response" | grep -o 'HTTP_CODE:[0-9]*' | cut -d: -f2)
+        
+        case $upload_http_code in
+            200) echo -e "   ${GREEN}✅ UPLOAD SUCCESS${NC}: File uploaded successfully" ;;
+            400) echo -e "   ${RED}❌ UPLOAD FAILED${NC}: Validation error" ;;
+            *) echo -e "   ${YELLOW}⚠️ UNEXPECTED${NC}: HTTP $upload_http_code" ;;
+        esac
         ;;
     400) echo -e "   ${RED}❌ VALIDATION FAILED${NC}: Bucket name rejected" ;;
     *) echo -e "   ${YELLOW}⚠️ UNEXPECTED${NC}: HTTP $create_http_code" ;;
-esac
-
-echo "   Uploading object: $valid_object"
-upload_response=$(curl -s -w "HTTP_CODE:%{http_code}" -X PUT -H "X-Customer-ID: integration-test-customer" -d "Test content" "http://localhost:8000/s3/$valid_bucket/$valid_object" 2>/dev/null)
-upload_http_code=$(echo "$upload_response" | grep -o 'HTTP_CODE:[0-9]*' | cut -d: -f2)
-
-case $upload_http_code in
-    307) echo -e "   ${GREEN}✅ SUCCESS${NC}: Redirected to regional endpoint" ;;
-    400) echo -e "   ${RED}❌ VALIDATION FAILED${NC}: Object key rejected" ;;
-    *) echo -e "   ${YELLOW}⚠️ UNEXPECTED${NC}: HTTP $upload_http_code" ;;
 esac
 
 # Test 2: Invalid bucket name
@@ -265,9 +289,66 @@ case $invalid_http_code in
     *) echo -e "   ${YELLOW}⚠️ UNEXPECTED${NC}: HTTP $invalid_http_code" ;;
 esac
 
-# Test 3: List customer buckets with mappings
+# Test 3: Complete workflow test
 echo ""
-echo "3. Testing customer bucket listing with mappings:"
+echo "3. Testing complete S3 workflow with bucket mapping:"
+workflow_bucket="workflow-test-$(date +%s)"
+workflow_customer="workflow-customer"
+
+echo "   Step 1: Create bucket with customer ID..."
+create_wf_response=$(curl -s -w "HTTP_CODE:%{http_code}" -X PUT \
+    -H "X-Customer-ID: $workflow_customer" \
+    "http://localhost:8000/s3/$workflow_bucket" 2>/dev/null)
+create_wf_http_code=$(echo "$create_wf_response" | grep -o 'HTTP_CODE:[0-9]*' | cut -d: -f2)
+
+if [ "$create_wf_http_code" = "307" ] || [ "$create_wf_http_code" = "200" ]; then
+    echo -e "   ${GREEN}✅ STEP 1 SUCCESS${NC}: Bucket created"
+    
+    sleep 1  # Give time for processing
+    
+    echo "   Step 2: Upload file to bucket..."
+    upload_wf_response=$(curl -s -w "HTTP_CODE:%{http_code}" -X PUT \
+        -H "X-Customer-ID: $workflow_customer" \
+        -H "Content-Type: application/json" \
+        -d '{"message": "Hello from hash-mapped bucket!", "timestamp": "'$(date -Iseconds)'"}' \
+        "http://localhost:8000/s3/$workflow_bucket/data/message.json" 2>/dev/null)
+    upload_wf_http_code=$(echo "$upload_wf_response" | grep -o 'HTTP_CODE:[0-9]*' | cut -d: -f2)
+    
+    if [ "$upload_wf_http_code" = "307" ] || [ "$upload_wf_http_code" = "200" ]; then
+        echo -e "   ${GREEN}✅ STEP 2 SUCCESS${NC}: File uploaded"
+        
+        echo "   Step 3: List bucket contents..."
+        list_wf_response=$(curl -s -w "HTTP_CODE:%{http_code}" \
+            -H "X-Customer-ID: $workflow_customer" \
+            "http://localhost:8000/s3/$workflow_bucket" 2>/dev/null)
+        list_wf_http_code=$(echo "$list_wf_response" | grep -o 'HTTP_CODE:[0-9]*' | cut -d: -f2)
+        
+        if [ "$list_wf_http_code" = "307" ] || [ "$list_wf_http_code" = "200" ]; then
+            echo -e "   ${GREEN}✅ STEP 3 SUCCESS${NC}: Bucket contents listed"
+        else
+            echo -e "   ${YELLOW}⚠️ STEP 3 PARTIAL${NC}: List returned HTTP $list_wf_http_code"
+        fi
+        
+        echo "   Step 4: Verify bucket mapping..."
+        mapping_wf_response=$(curl -s "http://localhost:8000/api/bucket-mappings/$workflow_customer/$workflow_bucket" 2>/dev/null)
+        if echo "$mapping_wf_response" | grep -q '"backend_mapping"'; then
+            backend_count=$(echo "$mapping_wf_response" | grep -o '"backend_count": [0-9]*' | cut -d: -f2 | tr -d ' ')
+            echo -e "   ${GREEN}✅ STEP 4 SUCCESS${NC}: Bucket mapping verified ($backend_count backends)"
+        else
+            echo -e "   ${YELLOW}⚠️ STEP 4 PARTIAL${NC}: Could not verify mapping"
+        fi
+        
+    else
+        echo -e "   ${RED}❌ STEP 2 FAILED${NC}: File upload failed (HTTP $upload_wf_http_code)"
+    fi
+    
+else
+    echo -e "   ${RED}❌ STEP 1 FAILED${NC}: Bucket creation failed (HTTP $create_wf_http_code)"
+fi
+
+# Test 4: List customer buckets with mappings
+echo ""
+echo "4. Testing customer bucket listing with mappings:"
 echo "   Listing buckets for integration-test-customer..."
 bucket_list_response=$(curl -s "http://localhost:8000/api/bucket-mappings/integration-test-customer" 2>/dev/null)
 
@@ -328,6 +409,7 @@ echo "• Bucket hash mapping for namespace collision avoidance"
 echo "• Customer isolation through deterministic hashing"
 echo "• GDPR-compliant HTTP redirects (global → regional)"
 echo "• Multi-backend replication support"
+echo "• Complete S3 workflow: Create bucket → Upload objects → List contents"
 echo ""
 echo "🗺️ Bucket Hash Mapping Benefits:"
 echo "• Unique backend names across all customers and providers"
@@ -335,6 +417,12 @@ echo "• Solves S3 global namespace collision problem"
 echo "• Enables true multi-backend replication"
 echo "• Customer only sees logical names"
 echo "• Deterministic generation (same input = same output)"
+echo ""
+echo "📋 Workflow Requirements:"
+echo "• Buckets must be created first using PUT /s3/{bucket-name}"
+echo "• Objects can only be uploaded to existing buckets"
+echo "• Each bucket gets unique backend names via hash mapping"
+echo "• Customer sees logical names, backends see hashed names"
 echo ""
 echo "🔧 Configuration:"
 echo "• Enable validation: ENABLE_S3_VALIDATION=true"
