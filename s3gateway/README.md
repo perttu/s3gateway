@@ -138,6 +138,22 @@ docker-compose logs -f
 - `POST /api/location-constraints/test` - Test location constraint parsing
 - `GET /api/location-constraints/available-locations` - List available regions and zones
 
+### S3 Tagging API (S3-Compatible)
+- `GET /s3/{bucket}?tagging` - Get bucket tags
+- `PUT /s3/{bucket}?tagging` - Set bucket tags (triggers replica count changes)
+- `DELETE /s3/{bucket}?tagging` - Delete bucket tags
+- `GET /s3/{bucket}/{key}?tagging` - Get object tags
+- `PUT /s3/{bucket}/{key}?tagging` - Set object tags (triggers replica count changes)
+- `DELETE /s3/{bucket}/{key}?tagging` - Delete object tags
+
+### Replication Queue API (Regional Gateway Only)
+- `GET /api/replication/queue/status` - Get replication queue status
+- `GET /api/replication/jobs/active` - List active replication jobs
+- `GET /api/replication/jobs/{job_id}` - Get specific job status
+- `DELETE /api/replication/jobs/{job_id}` - Cancel replication job
+- `POST /api/replication/jobs/add-replica` - Schedule replica addition
+- `POST /api/replication/jobs/remove-replica` - Schedule replica removal
+
 ## Configuration
 
 ### Environment Variables
@@ -537,6 +553,312 @@ Three customers can all use logical name "data-backup":
 
 All backend names are globally unique while customers use identical logical names.
 
+## S3 Tagging and Replication Management
+
+The gateway supports full S3-compatible tagging with automatic replica count management through background queues. This enables non-blocking replication operations triggered by tag changes, including **efficient deletion when replica count is reduced**.
+
+### How It Works
+
+1. **S3-Compatible Tagging**: Standard S3 tagging API endpoints with XML payloads
+2. **Tag-Based Replica Count**: Set `replica-count` tag to trigger replication changes
+3. **Background Processing**: Replication jobs queued and processed by worker threads
+4. **LocationConstraint Integration**: Respects allowed regions and priority order
+5. **Non-Blocking Operations**: Tag operations return immediately, replication happens async
+6. **Smart Deletion**: Efficient bulk deletion when replica count is reduced
+
+### Deletion Capabilities
+
+When replica count is reduced, the system provides comprehensive deletion:
+
+✅ **Individual Object Deletion**: Removes specific objects from unused zones  
+✅ **Bulk Bucket Deletion**: Deletes entire bucket replicas for cost optimization  
+✅ **Backend Bucket Cleanup**: Removes empty backend buckets completely  
+✅ **Database Metadata Updates**: Keeps metadata consistent with actual data  
+✅ **Primary Region Protection**: Always preserves primary region data  
+✅ **Smart Operation Selection**: Automatically chooses bulk vs individual operations  
+
+### Tag-Based Replica Management
+
+```bash
+# Set replica count via object tags
+curl -X PUT "http://localhost:8001/s3/my-bucket/my-file.txt?tagging" \
+  -H "X-Customer-ID: demo-customer" \
+  -H "Content-Type: application/xml" \
+  -d '<Tagging>
+    <TagSet>
+      <Tag>
+        <Key>replica-count</Key>
+        <Value>3</Value>
+      </Tag>
+      <Tag>
+        <Key>Environment</Key>
+        <Value>production</Value>
+      </Tag>
+    </TagSet>
+  </Tagging>'
+
+# Reduce replica count (triggers efficient deletion)
+curl -X PUT "http://localhost:8001/s3/my-bucket/my-file.txt?tagging" \
+  -H "X-Customer-ID: demo-customer" \
+  -H "Content-Type: application/xml" \
+  -d '<Tagging>
+    <TagSet>
+      <Tag>
+        <Key>replica-count</Key>
+        <Value>1</Value>
+      </Tag>
+      <Tag>
+        <Key>cost-optimization</Key>
+        <Value>enabled</Value>
+      </Tag>
+    </TagSet>
+  </Tagging>'
+
+# Set replica count via bucket tags (affects all objects)
+curl -X PUT "http://localhost:8001/s3/my-bucket?tagging" \
+  -H "X-Customer-ID: demo-customer" \
+  -H "Content-Type: application/xml" \
+  -d '<Tagging>
+    <TagSet>
+      <Tag>
+        <Key>replica-count</Key>
+        <Value>2</Value>
+      </Tag>
+    </TagSet>
+  </Tagging>'
+```
+
+### Replication Logic
+
+Based on LocationConstraint and replica count:
+
+```python
+# Example LocationConstraint: "fi,de,fr"
+regions = ['fi', 'de', 'fr']  # parsed from LocationConstraint
+replica_count = 2             # from replica-count tag
+
+# Active regions = first N regions
+active_regions = regions[:replica_count]  # ['fi', 'de']
+primary_region = regions[0]               # 'fi'
+```
+
+**Adding Replicas**: When `replica_count` increases:
+- Add next region from allowed list
+- Queue background job to copy data
+- Update metadata when complete
+
+**Removing Replicas**: When `replica_count` decreases:
+- Remove last region from active list
+- Queue background job to delete data (individual objects OR entire bucket)
+- Always preserve primary region
+- Clean up empty backend buckets
+
+### Deletion Job Types
+
+The system supports multiple deletion strategies:
+
+1. **Individual Object Removal** (`REMOVE_REPLICA`):
+   - Deletes specific objects from target zones
+   - Used for small-scale operations
+   - Preserves other objects in the bucket
+
+2. **Bulk Bucket Deletion** (`DELETE_BUCKET_REPLICA`):
+   - Deletes ALL objects from a bucket in target zone
+   - Automatically used for buckets with many objects (>10)
+   - Optionally deletes the empty backend bucket
+
+3. **Empty Bucket Cleanup** (`CLEANUP_EMPTY_BUCKET`):
+   - Removes completely empty backend buckets
+   - Prevents storage costs for unused buckets
+   - Updates database mapping status
+
+### Smart Operation Selection
+
+The system automatically chooses the most efficient approach:
+
+```python
+object_count = get_object_count_in_bucket(customer_id, bucket_name)
+
+if object_count > 10:
+    # Use bulk bucket deletion for efficiency
+    schedule_bucket_replica_deletion(customer_id, bucket_name, zone)
+else:
+    # Use individual object deletion for precision
+    for object_key in objects:
+        schedule_replica_removal(customer_id, bucket_name, object_key, zone)
+```
+
+### Deletion Safety Features
+
+- **Primary Region Protection**: Never deletes from the first region in LocationConstraint
+- **Validation**: Ensures replica count doesn't go below 1
+- **Atomic Operations**: Database updates only after successful deletion
+- **Error Handling**: Failed deletions don't affect successful ones
+- **Retry Logic**: Failed jobs automatically retried with exponential backoff
+
+### Supported Tag Names
+
+The system recognizes multiple tag names for replica count:
+- `replica-count` (recommended)
+- `replica_count`
+- `replication-count`
+- `replication_count`
+- `replicas`
+- `x-replica-count`
+
+### Replication Queue System
+
+#### Features
+- **Thread-Safe**: Multiple worker threads process jobs concurrently
+- **Priority-Based**: High-priority jobs (replica removal) processed first
+- **Retry Logic**: Failed jobs automatically retried with exponential backoff
+- **Job Tracking**: Monitor job status and completion
+- **Database Integration**: Metadata updated atomically
+- **Bulk Operations**: Efficient handling of large-scale deletions
+
+#### Queue Operations
+
+```bash
+# Check queue status
+curl "http://localhost:8001/api/replication/queue/status"
+
+# List active jobs
+curl "http://localhost:8001/api/replication/jobs/active"
+
+# Check specific job
+curl "http://localhost:8001/api/replication/jobs/{job_id}"
+
+# Cancel queued job
+curl -X DELETE "http://localhost:8001/api/replication/jobs/{job_id}"
+```
+
+#### Manual Job Scheduling
+
+```bash
+# Add replica manually
+curl -X POST "http://localhost:8001/api/replication/jobs/add-replica" \
+  -d "customer_id=demo-customer&bucket_name=my-bucket&object_key=file.txt&source_zone=fi-hel-st-1&target_zone=de-fra-st-1&priority=3"
+
+# Remove replica manually  
+curl -X POST "http://localhost:8001/api/replication/jobs/remove-replica" \
+  -d "customer_id=demo-customer&bucket_name=my-bucket&object_key=file.txt&target_zone=fr-par-st-1&priority=7"
+
+# Delete entire bucket replica (bulk operation)
+curl -X POST "http://localhost:8001/api/replication/jobs/delete-bucket-replica" \
+  -d "customer_id=demo-customer&bucket_name=my-bucket&target_zone=de-fra-st-1&priority=6"
+```
+
+### Integration Example
+
+Complete workflow combining LocationConstraint and tag-based replication with deletion:
+
+```bash
+# 1. Create bucket with LocationConstraint
+curl -X PUT "http://localhost:8000/s3/my-app-data" \
+  -H "X-Customer-ID: my-company" \
+  -H "Content-Type: application/xml" \
+  -d '<CreateBucketConfiguration>
+    <LocationConstraint>fi,de,fr</LocationConstraint>
+  </CreateBucketConfiguration>'
+
+# 2. Upload object (starts in primary region 'fi')
+curl -X PUT "http://localhost:8001/s3/my-app-data/user-profile.json" \
+  -H "X-Customer-ID: my-company" \
+  -H "Content-Type: application/json" \
+  -d '{"user_id": 12345, "name": "John Doe"}'
+
+# 3. Set tags to replicate to 3 regions
+curl -X PUT "http://localhost:8001/s3/my-app-data/user-profile.json?tagging" \
+  -H "X-Customer-ID: my-company" \
+  -H "Content-Type: application/xml" \
+  -d '<Tagging>
+    <TagSet>
+      <Tag>
+        <Key>replica-count</Key>
+        <Value>3</Value>
+      </Tag>
+      <Tag>
+        <Key>data-classification</Key>
+        <Value>sensitive</Value>
+      </Tag>
+    </TagSet>
+  </Tagging>'
+
+# 4. Check replication job status
+curl "http://localhost:8001/api/replication/jobs/active"
+
+# 5. Later: reduce replicas to save costs (triggers deletion)
+curl -X PUT "http://localhost:8001/s3/my-app-data/user-profile.json?tagging" \
+  -H "X-Customer-ID: my-company" \
+  -H "Content-Type: application/xml" \
+  -d '<Tagging>
+    <TagSet>
+      <Tag>
+        <Key>replica-count</Key>
+        <Value>1</Value>
+      </Tag>
+      <Tag>
+        <Key>cost-optimization</Key>
+        <Value>enabled</Value>
+      </Tag>
+    </TagSet>
+  </Tagging>'
+
+# 6. Monitor deletion progress
+curl "http://localhost:8001/api/replication/jobs/active"
+```
+
+### Cost Optimization Use Cases
+
+**Scale Down for Cost Savings**:
+```bash
+# Reduce from 3 replicas to 1 (66% cost reduction)
+# Deletes data from 'de' and 'fr', keeps 'fi'
+replica-count: 3 → 1
+```
+
+**Temporary Scale Up**:
+```bash
+# Scale up for high availability during critical periods
+replica-count: 1 → 3
+
+# Scale back down after critical period
+replica-count: 3 → 1
+```
+
+**Regional Compliance**:
+```bash
+# Move from multi-region to single region for compliance
+LocationConstraint: "fi,de,fr" + replica-count: 3 → replica-count: 1
+# Ensures data stays only in Finland
+```
+
+### Benefits
+
+✅ **Non-Blocking**: Tag operations return immediately  
+✅ **S3-Compatible**: Standard tagging API works with existing tools  
+✅ **Automatic Replication**: Tag changes trigger background replication  
+✅ **Efficient Deletion**: Bulk deletion for cost optimization  
+✅ **Cost Control**: Reduce replicas by changing tags  
+✅ **Compliance**: Respects LocationConstraint and data sovereignty  
+✅ **Monitoring**: Full visibility into replication jobs  
+✅ **Fault Tolerant**: Retry logic and error handling  
+✅ **Scalable**: Multi-threaded processing with priority queues  
+✅ **Smart Operations**: Automatic bulk vs individual operation selection  
+✅ **Complete Cleanup**: Removes data AND backend infrastructure  
+
+### Error Handling
+
+The system provides robust error handling:
+
+- **Tag Validation**: S3-compliant tag validation (keys ≤ 128 chars, values ≤ 256 chars)
+- **Constraint Validation**: Replica count cannot exceed allowed regions
+- **Job Retry**: Failed replication/deletion jobs automatically retried
+- **Partial Failures**: Some replicas may succeed while others fail
+- **Status Tracking**: Detailed job status and error messages
+- **Deletion Safety**: Primary region always preserved
+- **Backend Cleanup**: Empty buckets properly removed
+
 ## LocationConstraint
 
 The gateway supports S3-compatible LocationConstraint with advanced multi-location capabilities. Unlike standard S3 which only supports single regions, our implementation allows comma-separated regions/zones with sophisticated replication control.
@@ -720,6 +1042,9 @@ You now have a complete S3 gateway with:
 ✅ **S3 RFC-compliant naming validation** - Prevents backend failures
 ✅ **Bucket hash mapping** - Solves S3 global namespace collisions
 ✅ **LocationConstraint support** - S3-compatible multi-location control
+✅ **S3-compatible tagging API** - Full tagging support with XML payloads
+✅ **Tag-based replica management** - Set replica-count via tags
+✅ **Background replication queue** - Non-blocking replication operations
 ✅ **GDPR-compliant two-layer architecture** - HTTP redirects for data sovereignty  
 ✅ **Multi-regional support** - FI-HEL and DE-FRA regions
 ✅ **Multi-backend replication** - Unique bucket names per backend
@@ -727,7 +1052,7 @@ You now have a complete S3 gateway with:
 ✅ **Cross-border replication control** - Based on specified countries
 ✅ **Order-based location priority** - First location = primary placement
 ✅ **Flexible region/zone targeting** - fi, fi-hel, fi-hel-st-1 syntax
-✅ **Dynamic replica management** - Adjust replica_count via API
+✅ **Dynamic replica management** - Adjust replica_count via API or tags
 ✅ **Comprehensive validation** - Bucket names and object keys
 ✅ **Simple scripts** - `./start.sh` and `./test.sh` for easy operation
 ✅ **Single docker-compose.yml** - Simple deployment and management
@@ -740,7 +1065,7 @@ Start testing with:
 
 ## Workflow
 
-The S3 gateway follows standard S3 workflow with bucket hash mapping:
+The S3 gateway follows standard S3 workflow with bucket hash mapping and tagging:
 
 1. **Create bucket** (generates hash mapping):
    ```bash
@@ -753,14 +1078,27 @@ The S3 gateway follows standard S3 workflow with bucket hash mapping:
      -d "Hello World" http://localhost:8000/s3/my-data-bucket/documents/file.txt
    ```
 
-3. **List objects**:
+3. **Set tags** (triggers replication based on replica-count):
+   ```bash
+   curl -X PUT "http://localhost:8001/s3/my-data-bucket/documents/file.txt?tagging" \
+     -H "X-Customer-ID: my-company" \
+     -H "Content-Type: application/xml" \
+     -d '<Tagging><TagSet><Tag><Key>replica-count</Key><Value>3</Value></Tag></TagSet></Tagging>'
+   ```
+
+4. **List objects**:
    ```bash
    curl -H "X-Customer-ID: my-company" http://localhost:8000/s3/my-data-bucket
    ```
 
-4. **View bucket mapping**:
+5. **View bucket mapping**:
    ```bash
    curl http://localhost:8000/api/bucket-mappings/my-company/my-data-bucket
    ```
 
-Behind the scenes: Customer sees `my-data-bucket`, but backends get unique names like `s3gw-a1b2c3d4-spacetim`, solving S3's global namespace collision problem. 
+6. **Check replication status**:
+   ```bash
+   curl http://localhost:8001/api/replication/jobs/active
+   ```
+
+Behind the scenes: Customer sees `my-data-bucket`, but backends get unique names like `s3gw-a1b2c3d4-spacetim`, solving S3's global namespace collision problem. Tags trigger background replication jobs for non-blocking operations. 

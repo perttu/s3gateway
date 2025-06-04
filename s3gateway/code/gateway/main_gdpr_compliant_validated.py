@@ -30,6 +30,10 @@ from s3_validation import S3NameValidator, S3ValidationError, validate_s3_name, 
 from bucket_mapping import BucketMapper, BucketMappingService, create_bucket_with_mapping
 from location_constraint import LocationConstraintParser, LocationConstraintManager, Location
 
+# Import S3 tagging and replication queue modules
+from s3_tagging import S3TagManager, S3TaggingError, ReplicaCountManager
+from replication_queue import replication_queue, replication_manager, ReplicationQueue, ReplicationManager
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -247,6 +251,13 @@ async def startup_event():
     """Initialize application"""
     logger.info(f"Starting S3 Gateway Service in {GATEWAY_TYPE} mode...")
     
+    # Initialize replication queue for regional gateways
+    if GATEWAY_TYPE == 'regional':
+        logger.info("Initializing replication queue...")
+        replication_queue.set_database_session_factory(SessionLocal)
+        replication_queue.start()
+        logger.info("✅ Replication queue started")
+    
     if GATEWAY_TYPE == 'global':
         logger.info("Global routing gateway - GDPR-compliant redirects enabled")
         if ENABLE_GDPR_REDIRECTS:
@@ -264,6 +275,19 @@ async def startup_event():
         logger.warning("⚠️  S3 naming validation disabled - may cause backend failures")
     
     load_providers()
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup on shutdown"""
+    logger.info("Shutting down S3 Gateway Service...")
+    
+    # Stop replication queue
+    if GATEWAY_TYPE == 'regional':
+        logger.info("Stopping replication queue...")
+        replication_queue.stop()
+        logger.info("✅ Replication queue stopped")
+    
+    logger.info("Shutdown complete")
 
 # Global Gateway Routes (GATEWAY_TYPE == 'global')
 if GATEWAY_TYPE == 'global':
@@ -390,6 +414,7 @@ if GATEWAY_TYPE == 'global':
                 "enabled": ENABLE_S3_VALIDATION,
                 "strict_mode": S3_VALIDATION_STRICT
             },
+            "replication_queue": "Not applicable (global gateway)",
             "regional_endpoints": regional_status
         }
     
@@ -404,6 +429,106 @@ if GATEWAY_TYPE == 'global':
             return report
         except Exception as e:
             return {"error": str(e), "validation": "failed"}
+
+    # S3 Tagging API endpoints for global gateway (redirect to regional)
+    @app.get("/s3/{bucket_name}?tagging")
+    async def get_bucket_tagging_global(
+        request: Request,
+        bucket_name: str,
+        x_customer_id: str = Header(alias="X-Customer-ID", default="demo-customer")
+    ):
+        """Get bucket tagging - redirect to regional endpoint"""
+        customer_region = router_service.get_customer_region(x_customer_id) or router_service.get_default_region()
+        regional_endpoint = router_service.get_regional_endpoint(customer_region)
+        
+        if not regional_endpoint:
+            raise HTTPException(status_code=503, detail=f"Regional endpoint for {customer_region} not available")
+        
+        redirect_url = f"{regional_endpoint}/s3/{bucket_name}?tagging"
+        return RedirectResponse(url=redirect_url, status_code=307)
+    
+    @app.put("/s3/{bucket_name}?tagging")
+    async def put_bucket_tagging_global(
+        request: Request,
+        bucket_name: str,
+        x_customer_id: str = Header(alias="X-Customer-ID", default="demo-customer")
+    ):
+        """Put bucket tagging - redirect to regional endpoint"""
+        customer_region = router_service.get_customer_region(x_customer_id) or router_service.get_default_region()
+        regional_endpoint = router_service.get_regional_endpoint(customer_region)
+        
+        if not regional_endpoint:
+            raise HTTPException(status_code=503, detail=f"Regional endpoint for {customer_region} not available")
+        
+        redirect_url = f"{regional_endpoint}/s3/{bucket_name}?tagging"
+        return RedirectResponse(url=redirect_url, status_code=307)
+    
+    @app.delete("/s3/{bucket_name}?tagging")
+    async def delete_bucket_tagging_global(
+        request: Request,
+        bucket_name: str,
+        x_customer_id: str = Header(alias="X-Customer-ID", default="demo-customer")
+    ):
+        """Delete bucket tagging - redirect to regional endpoint"""
+        customer_region = router_service.get_customer_region(x_customer_id) or router_service.get_default_region()
+        regional_endpoint = router_service.get_regional_endpoint(customer_region)
+        
+        if not regional_endpoint:
+            raise HTTPException(status_code=503, detail=f"Regional endpoint for {customer_region} not available")
+        
+        redirect_url = f"{regional_endpoint}/s3/{bucket_name}?tagging"
+        return RedirectResponse(url=redirect_url, status_code=307)
+    
+    @app.get("/s3/{bucket_name}/{object_key:path}?tagging")
+    async def get_object_tagging_global(
+        request: Request,
+        bucket_name: str,
+        object_key: str,
+        x_customer_id: str = Header(alias="X-Customer-ID", default="demo-customer")
+    ):
+        """Get object tagging - redirect to regional endpoint"""
+        customer_region = router_service.get_customer_region(x_customer_id) or router_service.get_default_region()
+        regional_endpoint = router_service.get_regional_endpoint(customer_region)
+        
+        if not regional_endpoint:
+            raise HTTPException(status_code=503, detail=f"Regional endpoint for {customer_region} not available")
+        
+        redirect_url = f"{regional_endpoint}/s3/{bucket_name}/{object_key}?tagging"
+        return RedirectResponse(url=redirect_url, status_code=307)
+    
+    @app.put("/s3/{bucket_name}/{object_key:path}?tagging")
+    async def put_object_tagging_global(
+        request: Request,
+        bucket_name: str,
+        object_key: str,
+        x_customer_id: str = Header(alias="X-Customer-ID", default="demo-customer")
+    ):
+        """Put object tagging - redirect to regional endpoint"""
+        customer_region = router_service.get_customer_region(x_customer_id) or router_service.get_default_region()
+        regional_endpoint = router_service.get_regional_endpoint(customer_region)
+        
+        if not regional_endpoint:
+            raise HTTPException(status_code=503, detail=f"Regional endpoint for {customer_region} not available")
+        
+        redirect_url = f"{regional_endpoint}/s3/{bucket_name}/{object_key}?tagging"
+        return RedirectResponse(url=redirect_url, status_code=307)
+    
+    @app.delete("/s3/{bucket_name}/{object_key:path}?tagging")
+    async def delete_object_tagging_global(
+        request: Request,
+        bucket_name: str,
+        object_key: str,
+        x_customer_id: str = Header(alias="X-Customer-ID", default="demo-customer")
+    ):
+        """Delete object tagging - redirect to regional endpoint"""
+        customer_region = router_service.get_customer_region(x_customer_id) or router_service.get_default_region()
+        regional_endpoint = router_service.get_regional_endpoint(customer_region)
+        
+        if not regional_endpoint:
+            raise HTTPException(status_code=503, detail=f"Regional endpoint for {customer_region} not available")
+        
+        redirect_url = f"{regional_endpoint}/s3/{bucket_name}/{object_key}?tagging"
+        return RedirectResponse(url=redirect_url, status_code=307)
 
 # Regional Gateway Routes (GATEWAY_TYPE == 'regional')  
 elif GATEWAY_TYPE == 'regional':
@@ -514,6 +639,12 @@ elif GATEWAY_TYPE == 'regional':
             "s3_validation": {
                 "enabled": ENABLE_S3_VALIDATION,
                 "strict_mode": S3_VALIDATION_STRICT
+            },
+            "replication_queue": {
+                "running": replication_queue.running,
+                "worker_count": len(replication_queue.workers),
+                "active_jobs": len(replication_queue.active_jobs),
+                "completed_jobs": len(replication_queue.completed_jobs)
             }
         }
     
@@ -710,19 +841,363 @@ elif GATEWAY_TYPE == 'regional':
         except Exception as e:
             return {"error": str(e), "validation": "failed", "region": REGION_ID}
 
+    # S3 Tagging API endpoints for regional gateway
+    @app.get("/s3/{bucket_name}")
+    async def get_bucket_tagging_regional(
+        request: Request,
+        bucket_name: str,
+        x_customer_id: str = Header(alias="X-Customer-ID", default="demo-customer")
+    ):
+        """Get bucket tagging"""
+        if 'tagging' not in request.url.query:
+            # This is a regular bucket listing, handle normally
+            return await list_objects(request, bucket_name, x_customer_id)
+        
+        try:
+            with get_db() as session:
+                tag_manager = S3TagManager(session)
+                tags = tag_manager.get_bucket_tags(x_customer_id, bucket_name)
+                
+                # Generate S3-compatible XML response
+                xml_response = tag_manager.generate_tag_xml(tags)
+                
+                return Response(
+                    content=xml_response,
+                    media_type="application/xml",
+                    headers={
+                        "X-Region": REGION_ID,
+                        "X-Customer-ID": x_customer_id,
+                        "X-Tag-Count": str(len(tags))
+                    }
+                )
+                
+        except S3TaggingError as e:
+            return create_s3_error_response("NoSuchTagSet", str(e), bucket_name)
+        except Exception as e:
+            logger.error(f"Failed to get bucket tags: {e}")
+            return create_s3_error_response("InternalError", "Internal server error", bucket_name)
+    
+    @app.put("/s3/{bucket_name}")
+    async def put_bucket_tagging_regional(
+        request: Request,
+        bucket_name: str,
+        x_customer_id: str = Header(alias="X-Customer-ID", default="demo-customer")
+    ):
+        """Put bucket tagging or create bucket"""
+        if 'tagging' not in request.url.query:
+            # This is a regular bucket creation, handle normally
+            return await create_bucket_with_mapping_and_location(bucket_name, request, x_customer_id)
+        
+        try:
+            # Get the request body (should be XML)
+            body = await request.body()
+            body_str = body.decode('utf-8')
+            
+            with get_db() as session:
+                tag_manager = S3TagManager(session)
+                
+                # Parse tags from XML
+                tags = tag_manager.parse_tag_xml(body_str)
+                
+                # Set bucket tags
+                tag_manager.set_bucket_tags(x_customer_id, bucket_name, tags)
+                
+                # Process replica count changes for all objects in bucket
+                replica_manager = ReplicaCountManager(session, replication_manager)
+                job_ids_by_object = replica_manager.process_bucket_tag_replica_count_change(
+                    x_customer_id, bucket_name, tags
+                )
+                
+                total_jobs = sum(len(jobs) for jobs in job_ids_by_object.values())
+                
+                return Response(
+                    status_code=204,  # No Content
+                    headers={
+                        "X-Region": REGION_ID,
+                        "X-Customer-ID": x_customer_id,
+                        "X-Tag-Count": str(len(tags)),
+                        "X-Replication-Jobs": str(total_jobs),
+                        "X-Objects-Affected": str(len(job_ids_by_object))
+                    }
+                )
+                
+        except S3TaggingError as e:
+            return create_s3_error_response("InvalidRequest", str(e), bucket_name)
+        except Exception as e:
+            logger.error(f"Failed to put bucket tags: {e}")
+            return create_s3_error_response("InternalError", "Internal server error", bucket_name)
+    
+    @app.delete("/s3/{bucket_name}")
+    async def delete_bucket_tagging_regional(
+        request: Request,
+        bucket_name: str,
+        x_customer_id: str = Header(alias="X-Customer-ID", default="demo-customer")
+    ):
+        """Delete bucket tagging"""
+        if 'tagging' not in request.url.query:
+            # This would be a bucket deletion, not implemented yet
+            raise HTTPException(status_code=501, detail="Bucket deletion not implemented")
+        
+        try:
+            with get_db() as session:
+                tag_manager = S3TagManager(session)
+                tag_manager.delete_bucket_tags(x_customer_id, bucket_name)
+                
+                return Response(
+                    status_code=204,  # No Content
+                    headers={
+                        "X-Region": REGION_ID,
+                        "X-Customer-ID": x_customer_id
+                    }
+                )
+                
+        except S3TaggingError as e:
+            return create_s3_error_response("NoSuchTagSet", str(e), bucket_name)
+        except Exception as e:
+            logger.error(f"Failed to delete bucket tags: {e}")
+            return create_s3_error_response("InternalError", "Internal server error", bucket_name)
+    
+    @app.get("/s3/{bucket_name}/{object_key:path}")
+    async def get_object_tagging_regional(
+        request: Request,
+        bucket_name: str,
+        object_key: str,
+        x_customer_id: str = Header(alias="X-Customer-ID", default="demo-customer")
+    ):
+        """Get object tagging or object content"""
+        if 'tagging' not in request.url.query:
+            # This is a regular object GET, would need implementation
+            raise HTTPException(status_code=501, detail="Object GET not implemented in this demo")
+        
+        try:
+            with get_db() as session:
+                tag_manager = S3TagManager(session)
+                tags = tag_manager.get_object_tags(x_customer_id, bucket_name, object_key)
+                
+                # Generate S3-compatible XML response
+                xml_response = tag_manager.generate_tag_xml(tags)
+                
+                return Response(
+                    content=xml_response,
+                    media_type="application/xml",
+                    headers={
+                        "X-Region": REGION_ID,
+                        "X-Customer-ID": x_customer_id,
+                        "X-Tag-Count": str(len(tags))
+                    }
+                )
+                
+        except S3TaggingError as e:
+            return create_s3_error_response("NoSuchTagSet", str(e), bucket_name, object_key)
+        except Exception as e:
+            logger.error(f"Failed to get object tags: {e}")
+            return create_s3_error_response("InternalError", "Internal server error", bucket_name, object_key)
+    
+    @app.put("/s3/{bucket_name}/{object_key:path}")
+    async def put_object_tagging_regional(
+        request: Request,
+        bucket_name: str,
+        object_key: str,
+        x_customer_id: str = Header(alias="X-Customer-ID", default="demo-customer")
+    ):
+        """Put object tagging or upload object"""
+        if 'tagging' not in request.url.query:
+            # This is a regular object PUT, handle normally
+            return await put_object(request, bucket_name, object_key, x_customer_id)
+        
+        try:
+            # Get the request body (should be XML)
+            body = await request.body()
+            body_str = body.decode('utf-8')
+            
+            with get_db() as session:
+                tag_manager = S3TagManager(session)
+                
+                # Parse tags from XML
+                tags = tag_manager.parse_tag_xml(body_str)
+                
+                # Set object tags
+                tag_manager.set_object_tags(x_customer_id, bucket_name, object_key, tags)
+                
+                # Process replica count changes for this object
+                replica_manager = ReplicaCountManager(session, replication_manager)
+                job_ids = replica_manager.process_tag_based_replica_count_change(
+                    x_customer_id, bucket_name, object_key, tags
+                )
+                
+                return Response(
+                    status_code=204,  # No Content
+                    headers={
+                        "X-Region": REGION_ID,
+                        "X-Customer-ID": x_customer_id,
+                        "X-Tag-Count": str(len(tags)),
+                        "X-Replication-Jobs": str(len(job_ids)),
+                        "X-Jobs-Scheduled": ",".join(job_ids) if job_ids else "none"
+                    }
+                )
+                
+        except S3TaggingError as e:
+            return create_s3_error_response("InvalidRequest", str(e), bucket_name, object_key)
+        except Exception as e:
+            logger.error(f"Failed to put object tags: {e}")
+            return create_s3_error_response("InternalError", "Internal server error", bucket_name, object_key)
+    
+    @app.delete("/s3/{bucket_name}/{object_key:path}")
+    async def delete_object_tagging_regional(
+        request: Request,
+        bucket_name: str,
+        object_key: str,
+        x_customer_id: str = Header(alias="X-Customer-ID", default="demo-customer")
+    ):
+        """Delete object tagging or delete object"""
+        if 'tagging' not in request.url.query:
+            # This would be an object deletion, not implemented yet
+            raise HTTPException(status_code=501, detail="Object deletion not implemented")
+        
+        try:
+            with get_db() as session:
+                tag_manager = S3TagManager(session)
+                tag_manager.delete_object_tags(x_customer_id, bucket_name, object_key)
+                
+                return Response(
+                    status_code=204,  # No Content
+                    headers={
+                        "X-Region": REGION_ID,
+                        "X-Customer-ID": x_customer_id
+                    }
+                )
+                
+        except S3TaggingError as e:
+            return create_s3_error_response("NoSuchTagSet", str(e), bucket_name, object_key)
+        except Exception as e:
+            logger.error(f"Failed to delete object tags: {e}")
+            return create_s3_error_response("InternalError", "Internal server error", bucket_name, object_key)
+
 @app.get("/")
 async def root():
     return {
         "service": f"s3-gateway-{GATEWAY_TYPE}",
         "region": REGION_ID if GATEWAY_TYPE == 'regional' else 'global',
-        "message": f"GDPR-compliant two-layer S3 Gateway with validation ({GATEWAY_TYPE} tier)",
+        "message": f"GDPR-compliant two-layer S3 Gateway with validation and tagging ({GATEWAY_TYPE} tier)",
         "gdpr_compliance": "Customer data processed only in designated regional endpoints",
         "redirect_mode": ENABLE_GDPR_REDIRECTS if GATEWAY_TYPE == 'global' else "N/A",
         "s3_validation": {
             "enabled": ENABLE_S3_VALIDATION,
             "strict_mode": S3_VALIDATION_STRICT
-        }
+        },
+        "s3_tagging": "Full S3-compatible tagging API with replica count management",
+        "replication_queue": f"Background replication jobs ({'enabled' if GATEWAY_TYPE == 'regional' else 'not applicable'})"
     }
+
+# Replication Queue Management API (Regional Gateway Only)
+if GATEWAY_TYPE == 'regional':
+    @app.get("/api/replication/queue/status")
+    async def get_replication_queue_status():
+        """Get replication queue status"""
+        return {
+            "queue_status": {
+                "running": replication_queue.running,
+                "worker_count": len(replication_queue.workers),
+                "max_workers": replication_queue.max_workers
+            },
+            "job_counts": {
+                "active": len(replication_queue.active_jobs),
+                "completed": len(replication_queue.completed_jobs),
+                "queue_size": replication_queue.queue.qsize()
+            },
+            "workers": [
+                {
+                    "name": worker.name,
+                    "alive": worker.is_alive(),
+                    "daemon": worker.daemon
+                }
+                for worker in replication_queue.workers
+            ]
+        }
+    
+    @app.get("/api/replication/jobs/active")
+    async def list_active_replication_jobs():
+        """List all active replication jobs"""
+        active_jobs = replication_queue.list_active_jobs()
+        return {
+            "active_jobs": active_jobs,
+            "count": len(active_jobs)
+        }
+    
+    @app.get("/api/replication/jobs/{job_id}")
+    async def get_replication_job_status(job_id: str):
+        """Get status of a specific replication job"""
+        job_status = replication_queue.get_job_status(job_id)
+        
+        if not job_status:
+            raise HTTPException(status_code=404, detail="Job not found")
+        
+        return {
+            "job": job_status,
+            "found": True
+        }
+    
+    @app.delete("/api/replication/jobs/{job_id}")
+    async def cancel_replication_job(job_id: str):
+        """Cancel a replication job (if queued)"""
+        cancelled = replication_queue.cancel_job(job_id)
+        
+        if not cancelled:
+            raise HTTPException(status_code=400, detail="Job not found or cannot be cancelled")
+        
+        return {
+            "message": f"Job {job_id} cancelled successfully",
+            "job_id": job_id,
+            "cancelled": True
+        }
+    
+    @app.post("/api/replication/jobs/add-replica")
+    async def schedule_add_replica_job(
+        customer_id: str,
+        bucket_name: str,
+        object_key: str,
+        source_zone: str,
+        target_zone: str,
+        priority: int = 5
+    ):
+        """Schedule a replica addition job"""
+        job_id = replication_manager.schedule_replica_addition(
+            customer_id, bucket_name, object_key, source_zone, target_zone, priority
+        )
+        
+        return {
+            "message": "Replica addition job scheduled",
+            "job_id": job_id,
+            "customer_id": customer_id,
+            "bucket_name": bucket_name,
+            "object_key": object_key,
+            "source_zone": source_zone,
+            "target_zone": target_zone,
+            "priority": priority
+        }
+    
+    @app.post("/api/replication/jobs/remove-replica")
+    async def schedule_remove_replica_job(
+        customer_id: str,
+        bucket_name: str,
+        object_key: str,
+        target_zone: str,
+        priority: int = 7
+    ):
+        """Schedule a replica removal job"""
+        job_id = replication_manager.schedule_replica_removal(
+            customer_id, bucket_name, object_key, target_zone, priority
+        )
+        
+        return {
+            "message": "Replica removal job scheduled",
+            "job_id": job_id,
+            "customer_id": customer_id,
+            "bucket_name": bucket_name,
+            "object_key": object_key,
+            "target_zone": target_zone,
+            "priority": priority
+        }
 
 # Add bucket mapping endpoints
 @app.get("/api/bucket-mappings/{customer_id}")
