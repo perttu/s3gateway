@@ -1,7 +1,7 @@
 #!/bin/bash
 
-echo "🚀 S3 Gateway - Unified Demo & Test Launcher"
-echo "============================================"
+echo "🚀 S3 Gateway - Unified Service Launcher"
+echo "========================================"
 echo ""
 
 # Color codes
@@ -31,29 +31,13 @@ show_menu() {
     echo "  4. logs      - View service logs"
     echo "  5. status    - Check service health status"
     echo ""
-    echo -e "${BLUE}🧪 CORE TESTING${NC}"
-    echo "  6. test      - Comprehensive test suite (validation, mapping, compliance)"
-    echo "  7. quick     - Quick smoke test of all features"
-    echo ""
-    echo -e "${BLUE}🔐 AUTHENTICATION & SECURITY${NC}"
-    echo "  8. auth      - Full S3 authentication demo (AWS SigV4, credentials)"
-    echo "  9. auth-arch - Test GDPR-compliant authentication architecture"
-    echo ""
-    echo -e "${BLUE}🗺️  BUCKET MAPPING & LOCATION${NC}"
-    echo " 10. mapping   - Bucket hash mapping demo (namespace collision solution)"
-    echo " 11. location  - LocationConstraint demo (fi,de,fr zones)"
-    echo ""
-    echo -e "${BLUE}🏷️  TAGGING & REPLICATION${NC}"
-    echo " 12. tagging   - S3 tagging with background replication demo"
-    echo " 13. replica   - Replication management and deletion demo"
-    echo ""
-    echo -e "${BLUE}⚖️  GDPR COMPLIANCE${NC}"
-    echo " 14. gdpr      - GDPR compliance demo (proxy vs redirect)"
-    echo " 15. privacy   - Data sovereignty and compliance verification"
+    echo -e "${BLUE}🧪 TESTING${NC}"
+    echo "  6. test      - Comprehensive test suite"
+    echo "  7. quick     - Quick smoke test"
     echo ""
     echo -e "${BLUE}📚 DOCUMENTATION${NC}"
-    echo " 16. features  - List all S3 gateway features"
-    echo " 17. help      - Show detailed help for each command"
+    echo "  8. features  - List all S3 gateway features"
+    echo "  9. help      - Show detailed help"
     echo ""
     echo -e "${YELLOW}Usage: ./run.sh [command]${NC}"
     echo -e "${YELLOW}   or: ./run.sh (for interactive menu)${NC}"
@@ -122,29 +106,6 @@ show_detailed_help() {
     echo "             • LocationConstraint testing"
     echo "             • Complete workflow tests"
     echo "  quick    - Fast smoke test to verify basic functionality"
-    echo ""
-    echo -e "${BLUE}DEMO COMMANDS:${NC}"
-    echo "  auth     - Complete authentication demonstration:"
-    echo "             • Create AWS-style credentials"
-    echo "             • Test AWS CLI integration"
-    echo "             • Permission management"
-    echo "             • Global → Regional routing"
-    echo ""
-    echo "  mapping  - Bucket hash mapping demonstration:"
-    echo "             • Namespace collision avoidance"
-    echo "             • Customer isolation"
-    echo "             • Multi-backend unique names"
-    echo ""
-    echo "  tagging  - S3 tagging and replication:"
-    echo "             • XML tagging payloads"
-    echo "             • Replica count management"
-    echo "             • Background replication jobs"
-    echo "             • Bulk deletion when scaling down"
-    echo ""
-    echo "  gdpr     - GDPR compliance demonstration:"
-    echo "             • Proxy vs redirect approaches"
-    echo "             • Data sovereignty enforcement"
-    echo "             • Compliance audit trails"
 }
 
 run_command() {
@@ -210,109 +171,25 @@ run_command() {
                 echo -e "${RED}❌ Services not running. Start with: ./run.sh start${NC}"
             fi
             ;;
-        "8"|"auth")
-            if check_services; then
-                echo -e "${GREEN}🔐 Running S3 authentication demo...${NC}"
-                ./demo-s3-authentication.sh
-            else
-                echo -e "${RED}❌ Services not running. Start with: ./run.sh start${NC}"
-            fi
-            ;;
-        "9"|"auth-arch")
-            if check_services; then
-                echo -e "${GREEN}🏗️  Testing authentication architecture...${NC}"
-                ./test-auth-architecture.sh
-            else
-                echo -e "${RED}❌ Services not running. Start with: ./run.sh start${NC}"
-            fi
-            ;;
-        "10"|"mapping")
-            if check_services; then
-                echo -e "${GREEN}🗺️  Running bucket mapping demo...${NC}"
-                ./demo-bucket-mapping.sh
-            else
-                echo -e "${RED}❌ Services not running. Start with: ./run.sh start${NC}"
-            fi
-            ;;
-        "11"|"location")
-            if check_services; then
-                echo -e "${GREEN}🌍 Testing LocationConstraint features...${NC}"
-                echo "Available locations:"
-                curl -s "http://localhost:8000/api/location-constraints/available-locations" | jq '.available_locations' 2>/dev/null || echo "❌ Failed"
-                echo ""
-                echo "Testing location constraints:"
-                for constraint in "fi" "fi,de" "fi-hel-st-1" "fi,de,fr"; do
-                    echo "  Testing: $constraint"
-                    curl -s -X POST "http://localhost:8000/api/location-constraints/test" \
-                        -H "Content-Type: application/json" \
-                        -d "{\"location_constraint\": \"$constraint\", \"replica_count\": 2}" | \
-                        jq '.valid, .policy.primary_location, .policy.cross_border_replication' 2>/dev/null || echo "    ❌ Failed"
-                done
-            else
-                echo -e "${RED}❌ Services not running. Start with: ./run.sh start${NC}"
-            fi
-            ;;
-        "12"|"tagging")
-            if check_services; then
-                echo -e "${GREEN}🏷️  Running S3 tagging demo...${NC}"
-                ./demo-tagging-replication.sh
-            else
-                echo -e "${RED}❌ Services not running. Start with: ./run.sh start${NC}"
-            fi
-            ;;
-        "13"|"replica")
-            if check_services; then
-                echo -e "${GREEN}🔄 Testing replication management...${NC}"
-                echo "Replication queue status:"
-                curl -s "http://localhost:8001/api/replication/queue/status" | jq '.' 2>/dev/null || echo "❌ Failed"
-                echo ""
-                echo "Active replication jobs:"
-                curl -s "http://localhost:8001/api/replication/jobs/active" | jq '.count' 2>/dev/null || echo "❌ Failed"
-            else
-                echo -e "${RED}❌ Services not running. Start with: ./run.sh start${NC}"
-            fi
-            ;;
-        "14"|"gdpr")
-            echo -e "${GREEN}⚖️  Running GDPR compliance demo...${NC}"
-            ./demo-gdpr-compliance.sh
-            ;;
-        "15"|"privacy")
-            if check_services; then
-                echo -e "${GREEN}🔒 Verifying data sovereignty...${NC}"
-                echo "Global gateway architecture:"
-                curl -s http://localhost:8000/health | jq '.s3_authentication.flow, .architecture' 2>/dev/null || echo "❌ Failed"
-                echo ""
-                echo "Regional gateway authentication:"
-                curl -s http://localhost:8001/health | jq '.s3_authentication.status, .architecture.credential_storage' 2>/dev/null || echo "❌ Failed"
-            else
-                echo -e "${RED}❌ Services not running. Start with: ./run.sh start${NC}"
-            fi
-            ;;
-        "16"|"features")
+        "8"|"features")
             show_features
             ;;
-        "17"|"help")
+        "9"|"help")
             show_detailed_help
             ;;
         *)
             echo -e "${RED}❌ Unknown command: $cmd${NC}"
-            echo ""
             show_menu
-            return 1
             ;;
     esac
 }
 
 # Main execution
 if [ $# -eq 0 ]; then
-    # Interactive mode
     show_menu
     echo ""
-    echo -n "Enter command number or name: "
-    read -r choice
-    echo ""
-    run_command "$choice"
+    read -p "Enter command number or name: " cmd
+    run_command "$cmd"
 else
-    # Direct command mode
     run_command "$1"
 fi 
