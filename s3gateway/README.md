@@ -248,91 +248,416 @@ ENABLE_S3_AUTHENTICATION=true
 S3_AUTH_BYPASS_ENDPOINTS='["/health", "/api/credentials", "/validation"]'
 ```
 
-### Demo and Testing
+## Agent System Architecture
 
-Run the authentication demo to see the system in action:
+The S3 Gateway implements a sophisticated agent system for handling various asynchronous operations and background tasks. This system ensures reliable processing of replication, cleanup, and maintenance tasks while maintaining data consistency and compliance.
 
-```bash
-# Run comprehensive authentication demo
-./demo-s3-authentication.sh
+### Agent Types and Responsibilities
+
+1. **Replication Agent**
+   - Handles object replication between regions
+   - Manages replica count based on tagging
+   - Ensures data consistency across regions
+   - Implements cross-border replication policies
+   - Tracks replication status and progress
+
+2. **Cleanup Agent**
+   - Removes excess replicas when replica count is reduced
+   - Cleans up temporary files and failed uploads
+   - Manages object lifecycle based on tags
+   - Implements retention policies
+   - Handles bulk deletion operations
+
+3. **Validation Agent**
+   - Validates bucket names and object keys
+   - Ensures S3 RFC compliance
+   - Checks location constraints
+   - Verifies cross-border replication policies
+   - Maintains naming standards
+
+4. **Metadata Agent**
+   - Maintains consistency between S3 backends and metadata database
+   - Handles metadata synchronization
+   - Manages versioning information
+   - Tracks object locations and replicas
+   - Updates bucket mappings
+
+### Agent Flow Architecture
+
+```
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│  S3 Operation   │────▶│  Agent Queue    │────▶│  Agent Worker   │
+│                 │     │                 │     │                 │
+│ (PUT, DELETE,   │     │ • Priority      │     │ • Process       │
+│  Tag Update)    │     │ • Retry Logic   │     │   Background    │
+│                 │     │ • Error Handling│     │   Tasks         │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
+         │                       │                       │
+         │                       │                       │
+         ▼                       ▼                       ▼
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│  Status Update  │     │  Error Recovery │     │  Result Update  │
+│                 │     │                 │     │                 │
+│ • Progress      │     │ • Retry Failed  │     │ • Update        │
+│ • Completion    │     │   Operations    │     │   Metadata      │
+│ • Notifications │     │ • Alert on      │     │ • Trigger       │
+│                 │     │   Failures      │     │   Dependencies  │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
 ```
 
-This demo shows:
-- Credential creation and management
-- Authenticated S3 operations with AWS CLI
-- Permission enforcement and authorization failures
-- Credential updates and deactivation
-- Audit logging and compliance features
+### Agent Processing Flow
+
+1. **Task Creation**
+   ```python
+   # Example task creation for replication
+   {
+       "task_type": "replication",
+       "source_bucket": "customer-bucket",
+       "source_key": "object-key",
+       "target_regions": ["fi-hel", "de-fra"],
+       "replica_count": 2,
+       "priority": "high",
+       "metadata": {
+           "customer_id": "customer-123",
+           "compliance_requirements": ["gdpr", "data-sovereignty"]
+       }
+   }
+   ```
+
+2. **Queue Management**
+   - Tasks are queued with priority levels
+   - High priority for critical operations
+   - Retry logic for failed operations
+   - Dead letter queue for failed retries
+   - Rate limiting per customer/region
+
+3. **Worker Processing**
+   - Workers pick up tasks based on priority
+   - Process tasks in parallel where possible
+   - Update status in real-time
+   - Handle errors and retries
+   - Maintain audit trail
+
+4. **Status Tracking**
+   ```python
+   # Example status update
+   {
+       "task_id": "task-123",
+       "status": "in_progress",
+       "progress": 50,
+       "current_operation": "replicating_to_de_fra",
+       "started_at": "2024-03-20T10:00:00Z",
+       "updated_at": "2024-03-20T10:01:00Z",
+       "estimated_completion": "2024-03-20T10:02:00Z"
+   }
+   ```
+
+### Agent Configuration
+
+```bash
+# Agent system configuration
+AGENT_WORKER_COUNT=4
+AGENT_QUEUE_SIZE=1000
+AGENT_RETRY_ATTEMPTS=3
+AGENT_RETRY_DELAY=60
+AGENT_PROCESSING_TIMEOUT=3600
+AGENT_CLEANUP_INTERVAL=3600
+```
+
+### Agent API Endpoints
+
+- `GET /api/agents/status` - Get overall agent system status
+- `GET /api/agents/tasks` - List active tasks
+- `GET /api/agents/tasks/{task_id}` - Get task details
+- `POST /api/agents/tasks/{task_id}/retry` - Retry failed task
+- `DELETE /api/agents/tasks/{task_id}` - Cancel task
+- `GET /api/agents/queues` - View queue status
+- `GET /api/agents/workers` - List active workers
+
+### Agent Monitoring
+
+The agent system provides comprehensive monitoring:
+
+1. **Queue Metrics**
+   - Queue length
+   - Processing rate
+   - Error rate
+   - Retry count
+   - Processing time
+
+2. **Worker Metrics**
+   - Active workers
+   - Tasks processed
+   - Error count
+   - CPU/Memory usage
+   - Uptime
+
+3. **Task Metrics**
+   - Success rate
+   - Average processing time
+   - Error distribution
+   - Retry statistics
+   - Completion rate
 
 ### Error Handling
 
-The system returns standard S3 error responses:
+The agent system implements robust error handling:
 
-```xml
-<!-- Missing authentication -->
-<Error>
-    <Code>MissingSecurityHeader</Code>
-    <Message>Missing Authorization header</Message>
-    <Resource>/bucket/object</Resource>
-    <RequestId>12345678-1234-1234-1234-123456789012</RequestId>
-</Error>
+1. **Retry Logic**
+   - Exponential backoff
+   - Maximum retry attempts
+   - Error classification
+   - Dead letter queue
+   - Alert notifications
 
-<!-- Invalid credentials -->
-<Error>
-    <Code>InvalidAccessKeyId</Code>
-    <Message>Invalid access key</Message>
-    <Resource>/bucket/object</Resource>
-    <RequestId>12345678-1234-1234-1234-123456789012</RequestId>
-</Error>
+2. **Recovery Procedures**
+   - Automatic recovery for transient errors
+   - Manual intervention for critical failures
+   - State recovery after crashes
+   - Data consistency checks
+   - Audit trail maintenance
 
-<!-- Permission denied -->
-<Error>
-    <Code>AccessDenied</Code>
-    <Message>Access denied for action s3:GetObject</Message>
-    <Resource>/bucket/object</Resource>
-    <RequestId>12345678-1234-1234-1234-123456789012</RequestId>
-</Error>
-```
+### Agent Dependencies
 
-### Database Schema
+The agent system depends on:
 
-Authentication data is stored securely:
+1. **Database**
+   - Task queue storage
+   - Status tracking
+   - Metadata management
+   - Audit logging
+
+2. **Message Queue**
+   - Task distribution
+   - Worker coordination
+   - Status updates
+   - Error handling
+
+3. **Storage Backends**
+   - Object replication
+   - Data consistency
+   - Version management
+   - Cleanup operations
+
+## Metadata Structure
+
+The S3 Gateway maintains comprehensive metadata for all objects, buckets, and operations. This metadata is stored in PostgreSQL databases with a clear separation between global and regional data.
+
+### Global Metadata (Global Database)
 
 ```sql
--- S3 credentials with permissions
-CREATE TABLE s3_credentials (
-    access_key_id VARCHAR(20) UNIQUE NOT NULL,
-    secret_access_key VARCHAR(40) NOT NULL,
-    user_id VARCHAR(50) UNIQUE NOT NULL,
-    user_name VARCHAR(100) NOT NULL,
-    permissions JSONB NOT NULL DEFAULT '{}',
-    is_active BOOLEAN DEFAULT true,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    last_used_at TIMESTAMP
+-- Provider Information
+CREATE TABLE providers (
+    provider_id VARCHAR(50) PRIMARY KEY,
+    provider_name VARCHAR(100) NOT NULL,
+    provider_type VARCHAR(50) NOT NULL,
+    endpoint_url VARCHAR(255) NOT NULL,
+    region VARCHAR(50),
+    credentials JSONB,
+    capabilities JSONB,
+    status VARCHAR(20),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Authentication audit log
-CREATE TABLE s3_auth_log (
-    access_key_id VARCHAR(20),
-    request_method VARCHAR(10),
-    request_path VARCHAR(1024),
-    auth_status VARCHAR(20), -- success, failed, access_denied
+-- Region Configuration
+CREATE TABLE regions (
+    region_id VARCHAR(50) PRIMARY KEY,
+    region_name VARCHAR(100) NOT NULL,
+    country VARCHAR(50) NOT NULL,
+    metadata_endpoint VARCHAR(255) NOT NULL,
+    gateway_endpoint VARCHAR(255) NOT NULL,
+    primary_provider_id VARCHAR(50),
+    backup_provider_ids JSONB,
+    jurisdiction_info JSONB,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Customer Routing
+CREATE TABLE customer_routing (
+    customer_id VARCHAR(50) PRIMARY KEY,
+    primary_region_id VARCHAR(50) NOT NULL,
+    backup_region_ids JSONB,
+    routing_policy JSONB,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Bucket Mappings
+CREATE TABLE bucket_mappings (
+    mapping_id VARCHAR(50) PRIMARY KEY,
+    customer_id VARCHAR(50) NOT NULL,
+    logical_bucket_name VARCHAR(255) NOT NULL,
+    backend_mappings JSONB NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(customer_id, logical_bucket_name)
+);
+```
+
+### Regional Metadata (Regional Database)
+
+```sql
+-- Object Metadata
+CREATE TABLE objects (
+    object_id VARCHAR(50) PRIMARY KEY,
+    bucket_name VARCHAR(255) NOT NULL,
+    object_key VARCHAR(1024) NOT NULL,
+    size BIGINT NOT NULL,
+    content_type VARCHAR(100),
+    etag VARCHAR(50),
+    version_id VARCHAR(50),
+    storage_class VARCHAR(50),
+    encryption_info JSONB,
+    metadata JSONB,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_modified TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(bucket_name, object_key, version_id)
+);
+
+-- Object Tags
+CREATE TABLE object_tags (
+    object_id VARCHAR(50) NOT NULL,
+    tag_key VARCHAR(128) NOT NULL,
+    tag_value VARCHAR(256) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (object_id, tag_key)
+);
+
+-- Replication Status
+CREATE TABLE replication_status (
+    replication_id VARCHAR(50) PRIMARY KEY,
+    object_id VARCHAR(50) NOT NULL,
+    source_region VARCHAR(50) NOT NULL,
+    target_region VARCHAR(50) NOT NULL,
+    status VARCHAR(20) NOT NULL,
+    started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP,
     error_message TEXT,
-    source_ip INET,
+    retry_count INTEGER DEFAULT 0
+);
+
+-- Operations Log
+CREATE TABLE operations_log (
+    operation_id VARCHAR(50) PRIMARY KEY,
+    customer_id VARCHAR(50) NOT NULL,
+    operation_type VARCHAR(50) NOT NULL,
+    bucket_name VARCHAR(255),
+    object_key VARCHAR(1024),
+    status VARCHAR(20) NOT NULL,
+    error_message TEXT,
+    metadata JSONB,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 ```
 
-### Benefits
+### Metadata Fields Description
 
-🔐 **Enterprise Security**: AWS-compatible authentication that works with existing tools  
-🔐 **Compliance Ready**: Comprehensive audit logs for security compliance  
-🔐 **Flexible Permissions**: Fine-grained control over who can access what  
-🔐 **Zero Trust**: Every request authenticated and authorized  
-🔐 **Credential Management**: Full lifecycle management with secure storage  
-🔐 **Real-time Control**: Immediate credential deactivation and permission updates  
+#### Object Metadata
+- `object_id`: Unique identifier for the object
+- `bucket_name`: Name of the bucket containing the object
+- `object_key`: Full path/key of the object
+- `size`: Size of the object in bytes
+- `content_type`: MIME type of the object
+- `etag`: MD5 hash of the object content
+- `version_id`: Version identifier for versioned objects
+- `storage_class`: Storage class (STANDARD, IA, etc.)
+- `encryption_info`: Encryption details (algorithm, key ID, etc.)
+- `metadata`: Custom metadata key-value pairs
+- `created_at`: Object creation timestamp
+- `last_modified`: Last modification timestamp
 
-The authentication system ensures that your S3 gateway is production-ready with enterprise-grade security that's fully compatible with existing AWS S3 tools and workflows.
+#### Bucket Mappings
+- `mapping_id`: Unique identifier for the mapping
+- `customer_id`: Customer identifier
+- `logical_bucket_name`: Customer-facing bucket name
+- `backend_mappings`: JSON mapping to backend bucket names
+  ```json
+  {
+    "spacetime": "st-customer123-bucket456",
+    "upcloud": "uc-customer123-bucket456",
+    "hetzner": "hetz-customer123-bucket456"
+  }
+  ```
+
+#### Replication Status
+- `replication_id`: Unique identifier for replication job
+- `object_id`: ID of the object being replicated
+- `source_region`: Source region identifier
+- `target_region`: Target region identifier
+- `status`: Current status (PENDING, IN_PROGRESS, COMPLETED, FAILED)
+- `started_at`: Replication start timestamp
+- `completed_at`: Replication completion timestamp
+- `error_message`: Error details if failed
+- `retry_count`: Number of retry attempts
+
+#### Operations Log
+- `operation_id`: Unique identifier for the operation
+- `customer_id`: Customer identifier
+- `operation_type`: Type of operation (PUT, GET, DELETE, etc.)
+- `bucket_name`: Bucket involved in operation
+- `object_key`: Object key involved in operation
+- `status`: Operation status (SUCCESS, FAILED)
+- `error_message`: Error details if failed
+- `metadata`: Additional operation metadata
+- `created_at`: Operation timestamp
+
+### Metadata Access Patterns
+
+1. **Object Lookup**
+   ```sql
+   SELECT * FROM objects 
+   WHERE bucket_name = :bucket 
+   AND object_key = :key 
+   AND version_id = :version;
+   ```
+
+2. **Bucket Contents**
+   ```sql
+   SELECT * FROM objects 
+   WHERE bucket_name = :bucket 
+   ORDER BY object_key 
+   LIMIT :limit OFFSET :offset;
+   ```
+
+3. **Replication Status**
+   ```sql
+   SELECT * FROM replication_status 
+   WHERE object_id = :object_id 
+   AND status = 'IN_PROGRESS';
+   ```
+
+4. **Customer Buckets**
+   ```sql
+   SELECT bm.* FROM bucket_mappings bm
+   JOIN customer_routing cr ON bm.customer_id = cr.customer_id
+   WHERE cr.customer_id = :customer_id;
+   ```
+
+### Metadata Consistency
+
+The system ensures metadata consistency through:
+
+1. **ACID Transactions**
+   - All metadata changes are atomic
+   - Consistent state across tables
+   - Isolation between operations
+   - Durability guarantees
+
+2. **Versioning**
+   - Object versions tracked
+   - Version history maintained
+   - Rollback capability
+   - Conflict resolution
+
+3. **Replication Tracking**
+   - Real-time replication status
+   - Cross-region consistency
+   - Failure detection
+   - Recovery procedures
+
+4. **Audit Trail**
+   - All changes logged
+   - Operation history
+   - Compliance tracking
+   - Security monitoring
 
 ## LocationConstraint
 
@@ -532,7 +857,7 @@ You now have a complete S3 gateway with:
 ✅ **S3 Authentication & Authorization** - AWS SigV4 with GDPR-compliant architecture
 ✅ **Production-ready security** - Enterprise-grade authentication system
 
-### Quick Start
+## Quick Start
 
 ```bash
 # Start all services and explore features
@@ -543,40 +868,9 @@ You now have a complete S3 gateway with:
 ./run.sh quick
 ```
 
-### Key Features Demo
+## Unified Launcher (run.sh)
 
-```bash
-./run.sh auth        # AWS SigV4 authentication with credential management
-./run.sh mapping     # Bucket hash mapping solves namespace collisions  
-./run.sh tagging     # S3 tagging with background replication
-./run.sh gdpr        # GDPR-compliant architecture demonstration
-./run.sh test        # Comprehensive validation and compliance tests
-```
-
-### Manual Commands (Alternative)
-
-If you prefer individual scripts:
-
-```bash
-# Start services
-./start.sh
-
-# Run comprehensive tests
-./test.sh
-
-# Authentication demo
-./demo-s3-authentication.sh
-
-# Bucket mapping demo
-./demo-bucket-mapping.sh
-
-# Tagging and replication demo
-./demo-tagging-replication.sh
-```
-
-## Unified Launcher Commands
-
-The `./run.sh` script provides organized access to all functionality:
+The `./run.sh` script provides organized access to all functionality through a user-friendly menu interface.
 
 ### 🏗️ Setup & Management
 ```bash
@@ -593,35 +887,16 @@ The `./run.sh` script provides organized access to all functionality:
 ./run.sh quick      # Quick smoke test
 ```
 
-### 🔐 Authentication & Security  
-```bash
-./run.sh auth       # Full AWS SigV4 authentication demo
-./run.sh auth-arch  # Test GDPR-compliant auth architecture
-```
-
-### 🗺️ Bucket Mapping & Location
-```bash
-./run.sh mapping    # Bucket hash mapping demo
-./run.sh location   # LocationConstraint features
-```
-
-### 🏷️ Tagging & Replication
-```bash
-./run.sh tagging    # S3 tagging with replication demo
-./run.sh replica    # Replication management demo
-```
-
-### ⚖️ GDPR Compliance
-```bash
-./run.sh gdpr       # GDPR compliance demonstration
-./run.sh privacy    # Data sovereignty verification
-```
-
 ### 📚 Documentation
 ```bash
 ./run.sh features   # List all S3 gateway features
 ./run.sh help       # Detailed help for all commands
 ```
+
+### Usage
+- Run without arguments for interactive menu: `./run.sh`
+- Run specific command: `./run.sh <command>`
+- Get help: `./run.sh help`
 
 ## Workflow
 
