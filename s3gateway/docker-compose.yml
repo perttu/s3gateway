@@ -89,7 +89,7 @@ services:
     environment:
       DATABASE_URL: postgresql://s3gateway:s3gateway_pass@postgres-global:5432/s3gateway_global
       GATEWAY_TYPE: global
-      REGIONAL_ENDPOINTS: '{"FI-HEL": "http://localhost:8001", "DE-FRA": "http://localhost:8002"}'
+      REGIONAL_ENDPOINTS: '{"FI-HEL": "http://0.0.0.0:8001", "DE-FRA": "http://0.0.0.0:8002"}'
       ENABLE_GDPR_REDIRECTS: "true"          # Enable GDPR-compliant redirects
       ENABLE_S3_VALIDATION: "true"           # Enable S3 naming validation
       S3_VALIDATION_STRICT: "false"          # Standard validation mode
