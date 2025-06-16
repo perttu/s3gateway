@@ -1,0 +1,43 @@
+# Example Ceph configuration for librados agent
+# Copy this file to ceph.conf and modify according to your Ceph cluster
+
+[global]
+    # Cluster name
+    cluster = ceph
+    
+    # Monitor hosts (replace with your monitor IPs)
+    mon host = 10.0.1.10,10.0.1.11,10.0.1.12
+    
+    # Initial monitor map
+    mon initial members = mon01,mon02,mon03
+    
+    # Authentication
+    auth cluster required = cephx
+    auth service required = cephx
+    auth client required = cephx
+    
+    # Network configuration
+    public network = 10.0.1.0/24
+    cluster network = 10.0.2.0/24
+    
+    # Logging
+    log file = /var/log/ceph/ceph.log
+    
+    # Object size settings
+    osd max object size = 128MB
+    
+    # Performance tuning
+    filestore op threads = 2
+    filestore merge threshold = 40
+    filestore split multiple = 8
+    osd op threads = 2
+    
+[client]
+    # Default client settings
+    rbd cache = true
+    rbd cache writethrough until flush = true
+    
+[client.s3gateway]
+    # Specific settings for S3 gateway client
+    # Customize keyring path if needed
+    keyring = /etc/ceph/ceph.client.s3gateway.keyring 

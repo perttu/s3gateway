@@ -24,6 +24,7 @@ import boto3
 from botocore.exceptions import ClientError, BotoCoreError
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
+from librados_backend import LibradosBackend
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -34,6 +35,7 @@ DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://s3gateway:s3gateway_pass@
 S3PROXY_URL = os.getenv("S3PROXY_URL", "http://localhost:8080")
 PROVIDERS_FILE = os.getenv("PROVIDERS_FILE", "/app/providers_flat.csv")
 S3_BACKENDS_CONFIG = os.getenv("S3_BACKENDS_CONFIG", "/app/config/s3_backends.json")
+CEPH_BACKENDS_CONFIG = os.getenv("CEPH_BACKENDS_CONFIG", "/app/config/ceph_backends.json")
 
 # Configuration constants
 HARDCODED_BUCKET = "2025-datatransfer"
@@ -61,7 +63,9 @@ app.add_middleware(
 # Global data
 providers_df = None
 s3_backends = {}
+librados_backends = {}
 backends_config = None
+ceph_backends_config = None
 
 def generate_version_id() -> str:
     """Generate a custom version ID for our metadata system"""
@@ -342,6 +346,34 @@ def load_s3_backends():
         logger.error(f"Failed to load S3 backends: {e}")
         return False
 
+def load_ceph_backends():
+    """Load Ceph/librados backend configuration"""
+    global librados_backends, ceph_backends_config
+    
+    try:
+        with open(CEPH_BACKENDS_CONFIG, 'r') as f:
+            ceph_backends_config = json.load(f)
+        
+        librados_backends = {}
+        for backend_config in ceph_backends_config['backends']:
+            if backend_config.get('enabled', True):
+                backend = LibradosBackend(backend_config)
+                librados_backends[backend.name] = backend
+        
+        logger.info(f"Loaded {len(librados_backends)} Ceph backends")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Failed to load Ceph backends: {e}")
+        return False
+
+def get_all_backends():
+    """Get combined dictionary of all backends (S3 + Ceph)"""
+    all_backends = {}
+    all_backends.update(s3_backends)
+    all_backends.update(librados_backends)
+    return all_backends
+
 def load_providers():
     """Load providers from CSV file"""
     global providers_df
@@ -405,8 +437,16 @@ async def startup_event():
     logger.info("Starting S3 Gateway Service with real backends...")
     load_providers()
     
-    if not load_s3_backends():
+    s3_success = load_s3_backends()
+    ceph_success = load_ceph_backends()
+    
+    if not s3_success:
         logger.warning("Failed to load S3 backends - some features may not work")
+    if not ceph_success:
+        logger.warning("Failed to load Ceph backends - some features may not work")
+    
+    all_backends = get_all_backends()
+    logger.info(f"Total backends loaded: {len(all_backends)} (S3: {len(s3_backends)}, Ceph: {len(librados_backends)})")
 
 # API Endpoints (must come before S3 routes)
 
@@ -414,18 +454,49 @@ async def startup_event():
 async def health_check():
     """Health check endpoint"""
     backend_status = {}
+    
+    # Add S3 backends
     for name, backend in s3_backends.items():
         backend_status[name] = {
+            "type": "s3",
             "enabled": backend.enabled,
             "provider": backend.provider,
             "zone": backend.zone_code
         }
     
+    # Add Ceph backends with health check
+    for name, backend in librados_backends.items():
+        backend_status[name] = {
+            "type": "ceph",
+            "enabled": backend.enabled,
+            "provider": backend.provider,
+            "zone": backend.zone_code,
+            "agent_url": backend.agent_url
+        }
+    
+    all_backends = get_all_backends()
+    
     return {
         "status": "healthy", 
         "service": "s3-gateway",
         "backends": backend_status,
-        "backend_count": len(s3_backends)
+        "backend_count": len(all_backends),
+        "s3_backends": len(s3_backends),
+        "ceph_backends": len(librados_backends)
+    }
+
+@app.get("/ceph/health")
+async def check_ceph_backends_health():
+    """Check health of all Ceph backends"""
+    ceph_status = {}
+    
+    for name, backend in librados_backends.items():
+        ceph_status[name] = await backend.health_check()
+    
+    return {
+        "service": "s3-gateway",
+        "ceph_backends": ceph_status,
+        "backend_count": len(librados_backends)
     }
 
 @app.get("/providers")
@@ -442,11 +513,14 @@ async def list_providers():
 
 @app.get("/backends")
 async def list_backends():
-    """List configured S3 backends"""
+    """List configured backends (S3 + Ceph)"""
     backend_info = []
+    
+    # Add S3 backends
     for name, backend in s3_backends.items():
         backend_info.append({
             "name": backend.name,
+            "type": "s3",
             "provider": backend.provider,
             "zone_code": backend.zone_code,
             "region": backend.region,
@@ -454,30 +528,61 @@ async def list_backends():
             "is_primary": backend.is_primary
         })
     
-    return {"backends": backend_info, "count": len(backend_info)}
+    # Add Ceph backends
+    for name, backend in librados_backends.items():
+        backend_info.append({
+            "name": backend.name,
+            "type": "ceph",
+            "provider": backend.provider,
+            "zone_code": backend.zone_code,
+            "region": backend.region,
+            "enabled": backend.enabled,
+            "is_primary": backend.is_primary,
+            "agent_url": backend.agent_url,
+            "pool": backend.pool
+        })
+    
+    return {
+        "backends": backend_info, 
+        "count": len(backend_info),
+        "s3_backends": len(s3_backends),
+        "ceph_backends": len(librados_backends)
+    }
 
 @app.get("/bucket-config")
 async def get_bucket_config():
     """Get information about the hardcoded bucket configuration"""
+    all_backends = get_all_backends()
+    backend_list = []
+    
+    for backend in s3_backends.values():
+        backend_list.append({"name": backend.name, "provider": backend.provider, "type": "s3"})
+    
+    for backend in librados_backends.values():
+        backend_list.append({"name": backend.name, "provider": backend.provider, "type": "ceph"})
+    
     return {
         "hardcoded_bucket": HARDCODED_BUCKET,
         "note": "All uploads will go to this bucket regardless of the bucket name in the request",
-        "backends_count": len(s3_backends),
-        "backends": [{"name": backend.name, "provider": backend.provider} for backend in s3_backends.values()]
+        "backends_count": len(all_backends),
+        "s3_backends_count": len(s3_backends),
+        "ceph_backends_count": len(librados_backends),
+        "backends": backend_list
     }
 
 @app.post("/initialize-bucket")
 async def initialize_hardcoded_bucket(db: Session = Depends(get_db)):
     """Create the hardcoded bucket in all backends"""
     
-    if not s3_backends:
-        raise HTTPException(status_code=503, detail="No S3 backends configured")
+    all_backends = get_all_backends()
+    if not all_backends:
+        raise HTTPException(status_code=503, detail="No backends configured")
     
     results = {}
     success_count = 0
     
-    # Create bucket in all backends
-    for backend_name, backend in s3_backends.items():
+    # Create bucket in all backends (S3 + Ceph)
+    for backend_name, backend in all_backends.items():
         result = await backend.create_bucket(HARDCODED_BUCKET)
         results[backend_name] = result
         
@@ -486,7 +591,7 @@ async def initialize_hardcoded_bucket(db: Session = Depends(get_db)):
     
     # Store bucket metadata
     try:
-        for backend_name, backend in s3_backends.items():
+        for backend_name, backend in all_backends.items():
             if results[backend_name]['status'] in ['success', 'exists']:
                 query = text("""
                     INSERT INTO buckets (bucket_name, zone_code, region, metadata, created_at)

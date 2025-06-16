@@ -80,6 +80,29 @@ services:
       timeout: 10s
       retries: 3
 
+  # Librados Agent for FI-HEL region
+  librados-agent-fi-hel:
+    build: ./docker/librados_agent
+    container_name: s3gateway_librados_fi_hel
+    environment:
+      CEPH_CONF_FILE: /etc/ceph/ceph.conf
+      CEPH_KEYRING_FILE: /etc/ceph/ceph.client.s3gateway.keyring
+      CEPH_USER: s3gateway
+      CEPH_POOL: s3gateway
+      AGENT_PORT: 8090
+    ports:
+      - "8090:8090"
+    volumes:
+      - ./config/ceph/ceph.conf:/etc/ceph/ceph.conf:ro
+      - ./config/ceph/ceph.client.s3gateway.keyring:/etc/ceph/ceph.client.s3gateway.keyring:ro
+    networks:
+      - s3gateway_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8090/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
   # GDPR-Compliant Global Gateway with S3 Validation
   gateway-global:
     build:
@@ -125,13 +148,16 @@ services:
       ENABLE_S3_VALIDATION: "true"           # Enable S3 naming validation
       S3_VALIDATION_STRICT: "false"          # Standard validation mode
       S3_BACKENDS_CONFIG: /app/config/s3_backends_fi_hel.json
+      CEPH_BACKENDS_CONFIG: /app/config/ceph_backends.json
       PROVIDERS_FILE: /app/providers_flat.csv
       S3PROXY_URL: http://s3proxy:8080
     volumes:
       - ./code/gateway/main_gdpr_compliant_validated.py:/app/main.py
       - ./code/gateway/s3_validation.py:/app/s3_validation.py
+      - ./code/gateway/librados_backend.py:/app/librados_backend.py
       - ./providers_flat.csv:/app/providers_flat.csv
       - ./config/s3_backends.json:/app/config/s3_backends_fi_hel.json
+      - ./config/ceph_backends.json:/app/config/ceph_backends.json
     ports:
       - "8001:8000"  # Regional endpoint FI-HEL
     networks:
@@ -140,6 +166,8 @@ services:
       postgres-fi-hel:
         condition: service_healthy
       postgres-global:
+        condition: service_healthy
+      librados-agent-fi-hel:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -161,13 +189,16 @@ services:
       ENABLE_S3_VALIDATION: "true"           # Enable S3 naming validation
       S3_VALIDATION_STRICT: "true"           # Strict validation mode for German region
       S3_BACKENDS_CONFIG: /app/config/s3_backends_de_fra.json
+      CEPH_BACKENDS_CONFIG: /app/config/ceph_backends.json
       PROVIDERS_FILE: /app/providers_flat.csv
       S3PROXY_URL: http://s3proxy:8080
     volumes:
       - ./code/gateway/main_gdpr_compliant_validated.py:/app/main.py
       - ./code/gateway/s3_validation.py:/app/s3_validation.py
+      - ./code/gateway/librados_backend.py:/app/librados_backend.py
       - ./providers_flat.csv:/app/providers_flat.csv
       - ./config/s3_backends.json:/app/config/s3_backends_de_fra.json
+      - ./config/ceph_backends.json:/app/config/ceph_backends.json
     ports:
       - "8002:8000"  # Regional endpoint DE-FRA
     networks:

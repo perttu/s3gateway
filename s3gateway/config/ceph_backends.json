@@ -1,0 +1,42 @@
+{
+  "backends": [
+    {
+      "name": "ceph-fi-hel",
+      "provider": "Ceph",
+      "zone_code": "FI-HEL-CEPH-1",
+      "region": "FI-HEL",
+      "agent_url": "http://librados-agent-fi-hel:8090",
+      "pool": "s3gateway",
+      "enabled": true,
+      "is_primary": false,
+      "ceph_config": {
+        "mon_host": "10.0.1.10,10.0.1.11,10.0.1.12",
+        "cluster": "ceph",
+        "keyring": "/etc/ceph/ceph.client.s3gateway.keyring",
+        "user": "s3gateway"
+      }
+    },
+    {
+      "name": "ceph-de-fra",
+      "provider": "Ceph",
+      "zone_code": "DE-FRA-CEPH-1", 
+      "region": "DE-FRA",
+      "agent_url": "http://librados-agent-de-fra:8090",
+      "pool": "s3gateway",
+      "enabled": false,
+      "is_primary": false,
+      "ceph_config": {
+        "mon_host": "10.1.1.10,10.1.1.11,10.1.1.12",
+        "cluster": "ceph",
+        "keyring": "/etc/ceph/ceph.client.s3gateway.keyring",
+        "user": "s3gateway"
+      }
+    }
+  ],
+  "replication": {
+    "enabled": true,
+    "required_replicas": 1,
+    "async_upload": true,
+    "verify_uploads": true
+  }
+} 

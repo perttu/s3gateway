@@ -1,0 +1,13 @@
+# Example Ceph keyring for S3 gateway
+# Copy this file to ceph.client.s3gateway.keyring and replace with actual key from your cluster
+# 
+# To create a new user in your Ceph cluster, run:
+# ceph auth get-or-create client.s3gateway mon 'allow r' osd 'allow rwx pool=s3gateway'
+#
+# To get the key for an existing user, run:
+# ceph auth get client.s3gateway
+
+[client.s3gateway]
+    key = AQBxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx==
+    caps mon = "allow r"
+    caps osd = "allow rwx pool=s3gateway" 

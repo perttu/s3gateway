@@ -1,0 +1,5 @@
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+rados==17.2.0  # Ceph librados Python bindings
+rbd==17.2.0    # Ceph RBD Python bindings (optional, for block device support) 

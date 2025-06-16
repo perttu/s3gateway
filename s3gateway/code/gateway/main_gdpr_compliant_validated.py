@@ -24,7 +24,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 
 # Import our S3 validation module
-from s3_validation import S3NameValidator, S3ValidationError, validate_s3_name, S3Validator, S3ValidationResult
+from s3_validation import S3NameValidator, S3ValidationError, validate_s3_name, S3ValidationResult
 
 # Import bucket mapping modules
 from bucket_mapping import BucketMapper, BucketMappingService, create_bucket_with_mapping

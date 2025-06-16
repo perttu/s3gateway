@@ -338,6 +338,21 @@ def validate_s3_name(bucket_name: str = None, object_key: str = None, strict: bo
 # Import datetime for timestamps
 from datetime import datetime
 
+class S3ValidationResult:
+    """Result of S3 name validation"""
+    def __init__(self, is_valid: bool, errors: List[str] = None, warnings: List[str] = None):
+        self.is_valid = is_valid
+        self.errors = errors or []
+        self.warnings = warnings or []
+
+    def to_dict(self) -> Dict:
+        """Convert result to dictionary format"""
+        return {
+            'is_valid': self.is_valid,
+            'errors': self.errors,
+            'warnings': self.warnings
+        }
+
 if __name__ == "__main__":
     # Test examples
     validator = S3NameValidator()
