@@ -1,6 +1,12 @@
+import argparse
 import csv
 from collections import defaultdict
+from pathlib import Path
 import re
+
+
+DATA_DIR = Path(__file__).resolve().parents[1] / "data" / "providers"
+PROVIDERS_CSV = DATA_DIR / "providers.csv"
 
 def parse_location(location_str):
     """Parse location string in format 'Country (City1, City2)' into country and cities."""
@@ -34,7 +40,7 @@ def is_eu_country(country):
     }
     return country in eu_countries
 
-def analyze_locations():
+def analyze_locations(csv_path: Path = PROVIDERS_CSV):
     # Initialize counters and data structures
     unique_cities = defaultdict(set)  # Country -> set of unique cities
     providers_per_country = defaultdict(set)  # Country -> set of providers
@@ -43,7 +49,7 @@ def analyze_locations():
     uk_cities = set()
     
     # Read the CSV file
-    with open('providers.csv', 'r') as f:
+    with csv_path.open("r", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
             provider = row['Provider']
@@ -87,4 +93,12 @@ def analyze_locations():
         print(f"{country}: {len(providers)} providers")
 
 if __name__ == "__main__":
-    analyze_locations() 
+    parser = argparse.ArgumentParser(description="Analyze provider location coverage.")
+    parser.add_argument(
+        "--csv",
+        type=Path,
+        default=PROVIDERS_CSV,
+        help="Path to providers.csv (defaults to data/providers/providers.csv)",
+    )
+    args = parser.parse_args()
+    analyze_locations(args.csv)

@@ -1,10 +1,23 @@
 // Configuration
-// Use backend container name when running in Docker, fallback to localhost for direct access
-const API_BASE_URL = window.location.hostname === 'localhost' && window.location.port === '8080' 
-    ? 'http://localhost:8000'  // Docker Compose setup
-    : 'http://localhost:8000';  // Direct file access
+const API_BASE_URL = resolveApiBaseUrl();
+const BUCKET_DETAILS_CONCURRENCY = 5;
 
 console.log('API_BASE_URL:', API_BASE_URL);
+
+function resolveApiBaseUrl() {
+    if (window.APP_CONFIG?.apiBaseUrl) {
+        return window.APP_CONFIG.apiBaseUrl;
+    }
+    const { protocol, hostname, port } = window.location;
+    if (protocol === 'file:') {
+        return 'http://localhost:8000';
+    }
+    if (hostname === 'localhost' && port === '8080') {
+        return 'http://localhost:8000';
+    }
+    const portSegment = port ? `:${port}` : '';
+    return `${protocol}//${hostname}${portSegment}`;
+}
 
 // State management
 let currentCredentials = null;
@@ -34,6 +47,18 @@ function formatBytes(bytes) {
 function formatDate(dateString) {
     const date = new Date(dateString);
     return date.toLocaleDateString() + ' ' + date.toLocaleTimeString();
+}
+
+function escapeHtml(value) {
+    if (value === undefined || value === null) {
+        return '';
+    }
+    return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
 }
 
 function showError(message) {
@@ -119,50 +144,14 @@ async function discoverBuckets() {
         currentBuckets = await response.json();
         console.log('Found buckets:', currentBuckets.length);
         
-        // Enhance bucket data with file details
-        let totalSize = 0;
-        let totalFiles = 0;
+        // Enhance bucket data with file details concurrently
+        await enrichBucketsWithDetails(currentBuckets);
+        const totalSize = currentBuckets.reduce((acc, bucket) => acc + (bucket.total_size || 0), 0);
+        const totalFiles = currentBuckets.reduce((acc, bucket) => acc + (bucket.file_count || 0), 0);
         
-        for (let bucket of currentBuckets) {
-            try {
-                console.log(`Getting details for bucket: ${bucket.name}`);
-                const detailsResponse = await fetch(`${API_BASE_URL}/discover/bucket/${bucket.name}`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify(currentCredentials)
-                });
-                
-                console.log(`Details response for ${bucket.name}:`, detailsResponse.status);
-                
-                if (detailsResponse.ok) {
-                    const details = await detailsResponse.json();
-                    bucket.files = details.files || [];
-                    bucket.file_count = details.file_count || 0;
-                    bucket.total_size = details.total_size || 0;
-                    bucket.versioning_status = details.versioning_status || 'Unknown';
-                    totalSize += details.total_size || 0;
-                    totalFiles += details.file_count || 0;
-                    console.log(`Bucket ${bucket.name}: ${details.file_count} files, ${details.total_size} bytes`);
-                } else {
-                    const errorText = await detailsResponse.text();
-                    console.error(`Failed response for bucket ${bucket.name}:`, errorText);
-                    bucket.files = [];
-                    bucket.file_count = 0;
-                    bucket.total_size = 0;
-                }
-            } catch (err) {
-                console.error(`Failed to get details for bucket ${bucket.name}:`, err);
-                bucket.files = [];
-                bucket.file_count = 0;
-                bucket.total_size = 0;
-            }
-        }
-        
-        // Create snapshot data
+        // Create snapshot data; backend will assign authoritative id/timestamp
         currentSnapshot = {
-            id: '',  // Will be assigned by backend
+            id: null,
             timestamp: new Date().toISOString(),
             endpoint: currentCredentials.endpoint_url,
             region: currentCredentials.region,
@@ -190,6 +179,59 @@ async function discoverBuckets() {
     }
 }
 
+async function enrichBucketsWithDetails(buckets) {
+    if (!buckets.length) {
+        return;
+    }
+    let nextIndex = 0;
+    const workerCount = Math.min(BUCKET_DETAILS_CONCURRENCY, buckets.length);
+    const worker = async () => {
+        while (true) {
+            const bucketIndex = nextIndex++;
+            if (bucketIndex >= buckets.length) {
+                break;
+            }
+            await fetchAndAttachBucketDetails(buckets[bucketIndex]);
+        }
+    };
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
+}
+
+async function fetchAndAttachBucketDetails(bucket) {
+    try {
+        console.log(`Getting details for bucket: ${bucket.name}`);
+        const detailsResponse = await fetch(`${API_BASE_URL}/discover/bucket/${bucket.name}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(currentCredentials)
+        });
+        
+        console.log(`Details response for ${bucket.name}:`, detailsResponse.status);
+        
+        if (detailsResponse.ok) {
+            const details = await detailsResponse.json();
+            bucket.files = details.files || [];
+            bucket.file_count = details.file_count || 0;
+            bucket.total_size = details.total_size || 0;
+            bucket.versioning_status = details.versioning_status || 'Unknown';
+            console.log(`Bucket ${bucket.name}: ${bucket.file_count} files, ${bucket.total_size} bytes`);
+        } else {
+            const errorText = await detailsResponse.text();
+            console.error(`Failed response for bucket ${bucket.name}:`, errorText);
+            bucket.files = [];
+            bucket.file_count = 0;
+            bucket.total_size = 0;
+        }
+    } catch (err) {
+        console.error(`Failed to get details for bucket ${bucket.name}:`, err);
+        bucket.files = [];
+        bucket.file_count = 0;
+        bucket.total_size = 0;
+    }
+}
+
 // Save snapshot to backend
 async function saveSnapshotToBackend(snapshot) {
     console.log('Saving snapshot to backend...');
@@ -212,6 +254,8 @@ async function saveSnapshotToBackend(snapshot) {
         
         const savedMetadata = await response.json();
         console.log('Snapshot saved:', savedMetadata);
+        currentSnapshot.id = savedMetadata.id;
+        currentSnapshot.timestamp = savedMetadata.timestamp;
         
         // Show snapshot info
         showSnapshotInfo(savedMetadata);
@@ -230,8 +274,8 @@ function showSnapshotInfo(metadata) {
             <span class="alert-icon">✅</span>
             <div>
                 <strong>Snapshot Saved Successfully!</strong>
-                <p>ID: ${metadata.id}</p>
-                <p>File: ${metadata.filename}</p>
+                <p>ID: ${escapeHtml(metadata.id)}</p>
+                <p>File: ${escapeHtml(metadata.filename)}</p>
             </div>
         </div>
     `;
@@ -259,26 +303,30 @@ function displayBuckets() {
             <div class="summary-stats">
                 <div class="stat">
                     <span class="stat-label">Endpoint</span>
-                    <span class="stat-value">${currentSnapshot.endpoint}</span>
+                    <span class="stat-value">${escapeHtml(currentSnapshot.endpoint)}</span>
                 </div>
                 <div class="stat">
                     <span class="stat-label">Total Buckets</span>
-                    <span class="stat-value">${currentSnapshot.buckets.length}</span>
+                    <span class="stat-value">${escapeHtml(currentSnapshot.buckets.length)}</span>
                 </div>
                 <div class="stat">
                     <span class="stat-label">Total Files</span>
-                    <span class="stat-value">${currentSnapshot.total_files.toLocaleString()}</span>
+                    <span class="stat-value">${escapeHtml((currentSnapshot.total_files || 0).toLocaleString())}</span>
                 </div>
                 <div class="stat">
                     <span class="stat-label">Total Size</span>
-                    <span class="stat-value">${formatBytes(currentSnapshot.total_size)}</span>
+                    <span class="stat-value">${escapeHtml(formatBytes(currentSnapshot.total_size || 0))}</span>
                 </div>
             </div>
             <div class="json-preview">
                 <h4>Snapshot Preview</h4>
-                <pre>${JSON.stringify(currentSnapshot, null, 2)}</pre>
+                <pre class="snapshot-preview"></pre>
             </div>
         `;
+        const previewNode = summaryDiv.querySelector('.snapshot-preview');
+        if (previewNode) {
+            previewNode.textContent = JSON.stringify(currentSnapshot, null, 2);
+        }
         
         if (!document.getElementById('snapshotSummary')) {
             bucketsCard.insertBefore(summaryDiv, document.getElementById('bucketsList'));
@@ -296,14 +344,20 @@ function displayBuckets() {
         const bucketElement = document.createElement('div');
         bucketElement.className = 'bucket-item';
         bucketElement.onclick = () => viewBucketDetails(bucket.name);
+        const creationDate = bucket.creation_date
+            ? escapeHtml(formatDate(bucket.creation_date))
+            : 'Unknown';
+        const fileCountDisplay = escapeHtml((bucket.file_count || 0).toLocaleString());
+        const sizeDisplay = escapeHtml(formatBytes(bucket.total_size || 0));
+        const versioningDisplay = escapeHtml(bucket.versioning_status || 'Unknown');
         
         bucketElement.innerHTML = `
-            <div class="bucket-name">🪣 ${bucket.name}</div>
-            <div class="bucket-date">Created: ${bucket.creation_date ? formatDate(bucket.creation_date) : 'Unknown'}</div>
+            <div class="bucket-name">🪣 ${escapeHtml(bucket.name)}</div>
+            <div class="bucket-date">Created: ${creationDate}</div>
             <div class="bucket-stats-mini">
-                <span>Files: ${bucket.file_count || 0}</span>
-                <span>Size: ${formatBytes(bucket.total_size || 0)}</span>
-                <span>Versioning: ${bucket.versioning_status || 'Unknown'}</span>
+                <span>Files: ${fileCountDisplay}</span>
+                <span>Size: ${sizeDisplay}</span>
+                <span>Versioning: ${versioningDisplay}</span>
             </div>
         `;
         
@@ -380,11 +434,14 @@ function displayBucketDetails(details) {
     
     details.files.forEach(file => {
         const row = document.createElement('tr');
+        const lastModified = file.last_modified
+            ? escapeHtml(formatDate(file.last_modified))
+            : 'Unknown';
         row.innerHTML = `
-            <td class="file-name">${file.key}</td>
-            <td class="file-size">${formatBytes(file.size)}</td>
-            <td>${formatDate(file.last_modified)}</td>
-            <td style="font-family: monospace; font-size: 0.9em;">${file.etag}</td>
+            <td class="file-name">${escapeHtml(file.key)}</td>
+            <td class="file-size">${escapeHtml(formatBytes(file.size))}</td>
+            <td>${lastModified}</td>
+            <td style="font-family: monospace; font-size: 0.9em;">${escapeHtml(file.etag || '')}</td>
         `;
         tbody.appendChild(row);
     });

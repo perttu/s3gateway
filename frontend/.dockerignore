@@ -1,0 +1,10 @@
+.git
+.gitignore
+node_modules/
+*.log
+.env
+.env.*
+dist/
+build/
+.DS_Store
+Thumbs.db

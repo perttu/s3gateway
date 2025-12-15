@@ -1,5 +1,7 @@
 .PHONY: help build up down logs clean restart shell-backend shell-frontend
 
+COMPOSE_CMD = docker-compose -f docker/docker-compose.yml
+DEV_COMPOSE_CMD = docker-compose -f docker/docker-compose.yml -f docker/dev/docker-compose.dev.yml
 help: ## Show this help message
 	@echo 'Usage: make [target]'
 	@echo ''
@@ -7,40 +9,40 @@ help: ## Show this help message
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-15s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 build: ## Build Docker images
-	docker-compose build
+	$(COMPOSE_CMD) build
 
 up: ## Start all services
-	docker-compose up -d
+	$(COMPOSE_CMD) up -d
 
 down: ## Stop all services
-	docker-compose down
+	$(COMPOSE_CMD) down
 
 logs: ## View logs from all services
-	docker-compose logs -f
+	$(COMPOSE_CMD) logs -f
 
 logs-backend: ## View backend logs
-	docker-compose logs -f backend
+	$(COMPOSE_CMD) logs -f backend
 
 logs-frontend: ## View frontend logs
-	docker-compose logs -f frontend
+	$(COMPOSE_CMD) logs -f frontend
 
 restart: ## Restart all services
-	docker-compose restart
+	$(COMPOSE_CMD) restart
 
 clean: ## Remove containers and volumes
-	docker-compose down -v
+	$(COMPOSE_CMD) down -v
 
 shell-backend: ## Open shell in backend container
-	docker-compose exec backend /bin/bash
+	$(COMPOSE_CMD) exec backend /bin/bash
 
 shell-frontend: ## Open shell in frontend container
-	docker-compose exec frontend /bin/sh
+	$(COMPOSE_CMD) exec frontend /bin/sh
 
 dev: ## Start in development mode with hot reload
-	docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
+	$(DEV_COMPOSE_CMD) up
 
 dev-build: ## Build for development
-	docker-compose -f docker-compose.yml -f docker-compose.dev.yml build
+	$(DEV_COMPOSE_CMD) build
 
 ps: ## Show running containers
-	docker-compose ps 
+	$(COMPOSE_CMD) ps

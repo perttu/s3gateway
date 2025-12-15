@@ -1,4 +1,4 @@
-# Bulletproof Protocol Plan for Zero-Trust Federated S3 Gateway
+# S3 Proxy Plan for Zero-Trust Federated S3 Gateway
 
 ## 1. Objectives
 
@@ -12,9 +12,44 @@
 
 ---
 
+## 1.1 Protocol Differences vs Vanilla S3
+
+```mermaid
+flowchart LR
+    Client["SigV4 Client<br/><small>S3-compatible</small>"]
+    Gateway["S3 Proxy Layer<br/><small>backend/main.py</small>"]
+    Hasher["Namespace Hasher<br/><small>backend/app/hash_utils.py</small>"]
+    Metadata["Metadata Authority<br/>PostgreSQL"]
+    Policy["Policy Engine<br/><small>residency + replica-count</small>"]
+    Placement["Placement Engine"]
+    Backends["Regional Backends<br/><small>Ceph/MinIO/AWS/etc.</small>"]
+
+    Client --> Gateway --> Hasher --> Metadata
+    Metadata --> Policy --> Placement
+    Placement --> Backends
+```
+
+- **Namespace Hashing** – logical buckets are deterministically hashed (`s3gw-<hash>-<provider>`) so tenants can request familiar names without global conflicts. Hashing code now lives in `backend/app/hash_utils.py` and its metadata representations are described in `docs/ARCHITECTURE.md`.
+- **Policy Metadata** – metadata rows persist residency (`region_lock`), `replica-count`, encryption tags, and feature support (object lock, ISO 27001). The replication queue reads the policy fields before touching storage.
+- **Snapshot & Discovery Tier** – `backend/` + `frontend/` capture sanitized discovery snapshots and never store customer credentials, providing a human-friendly inspection layer before data enters the gateway.
+- **Component References** – `docker/` contains the container definitions that orchestrate the discovery tier, while `data/providers/` + `scripts/` catalog EU provider capabilities referenced by the policy engine.
+
+---
+
+## 1.2 Current Repository Implementation
+
+- **Hashing utilities** live in `backend/app/hash_utils.py` with pytest coverage, ensuring deterministic bucket names for any backend identifier.
+- **Metadata store** is bootstrapped via `backend/app/db.py`, using a lightweight SQLite database (`metadata.db` by default, overridable via `PROXY_METADATA_DB_PATH`). `data/providers/providers_flat.csv` is seeded on startup to expose residency and capability data.
+- **Metadata API** sits under `/proxy/*` (implemented in `backend/app/proxy_meta.py`) with CRUD endpoints for bucket mappings and object metadata.
+- **Tests** cover the API helpers directly (`backend/tests/test_proxy_meta.py`).
+
+These building blocks replace the direct dependency on the archived `s3gateway/` tree for new development. Future phases will extend them into the full proxy.
+
+---
+
 ## 2. System Components
 
-### 2.1 Bulletproof Gateway (API Layer)
+### 2.1 S3 Proxy Layer (API)
 
 * Accepts `PUT`, `GET`, `HEAD`, `DELETE` requests
 * Handles encryption metadata, validates headers
@@ -48,7 +83,7 @@
 
 ### 2.5 Background Workers
 
-* Replica repair daemon (healing jobs)
+* Replica repair daemon (healing jobs). Phase 3 introduces the first polling worker using sqlite-backed replication jobs and a CLI runner under `scripts/replication_worker.py`.
 * Storage health pinger (latency, availability)
 * Metadata vacuum and snapshot job
 * Region placement checker
@@ -199,7 +234,7 @@
 
 * Prompt: Add source S3 buckets (URL + keys + region)
 * Prompt: Define replication policy (target regions, redundancy)
-* Add Bulletproof destination S3 backends (or select from approved list)
+* Add proxy-managed destination S3 backends (or select from approved list)
 * User provides decryption passphrase to start job
 * Replication agent fetches from DB queue
 * Agent decrypts key, transfers data, updates status

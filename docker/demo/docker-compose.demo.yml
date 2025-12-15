@@ -1,0 +1,63 @@
+version: "3.9"
+
+services:
+  metadata:
+    image: sqlite:3
+    container_name: s3proxy-metadata
+    command: ["tail", "-f", "/dev/null"]
+    volumes:
+      - metadata_db:/data
+    healthcheck:
+      test: ["CMD", "ls", "/data"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  backend:
+    build:
+      context: ../../backend
+      dockerfile: ../../docker/backend/Dockerfile
+    container_name: s3proxy-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PROXY_METADATA_DB_PATH=/metadata/metadata.db
+      - S3_BACKEND_ENDPOINT=https://minio.local
+      - S3_BACKEND_REGION=us-east-1
+      - S3_BACKEND_ACCESS_KEY=${S3_BACKEND_ACCESS_KEY:-backend}
+      - S3_BACKEND_SECRET_KEY=${S3_BACKEND_SECRET_KEY:-backendsecret}
+      - TENANT_SECRET_PASSPHRASE=${TENANT_SECRET_PASSPHRASE:-change-me}
+      - ADMIN_API_KEY=${ADMIN_API_KEY:-demo-admin}
+    volumes:
+      - metadata_db:/metadata
+    depends_on:
+      metadata:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  worker:
+    build:
+      context: ../../backend
+      dockerfile: ../../docker/backend/Dockerfile
+    container_name: s3proxy-worker
+    command: ["python", "scripts/replication_worker.py"]
+    environment:
+      - PROXY_METADATA_DB_PATH=/metadata/metadata.db
+      - S3_BACKEND_ENDPOINT=https://minio.local
+      - S3_BACKEND_REGION=us-east-1
+      - S3_BACKEND_ACCESS_KEY=${S3_BACKEND_ACCESS_KEY:-backend}
+      - S3_BACKEND_SECRET_KEY=${S3_BACKEND_SECRET_KEY:-backendsecret}
+      - TENANT_SECRET_PASSPHRASE=${TENANT_SECRET_PASSPHRASE:-change-me}
+    volumes:
+      - metadata_db:/metadata
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  metadata_db:

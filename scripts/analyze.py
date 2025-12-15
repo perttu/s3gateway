@@ -1,6 +1,12 @@
+import argparse
 import csv
 from collections import defaultdict
+from pathlib import Path
 import re
+
+
+DATA_DIR = Path(__file__).resolve().parents[1] / "data" / "providers"
+PROVIDERS_CSV = DATA_DIR / "providers.csv"
 
 def parse_location(location_str):
     """Parse location string in format 'Country (City1, City2)' into country and cities."""
@@ -24,14 +30,14 @@ def parse_location(location_str):
     
     return None, []
 
-def analyze_providers():
+def analyze_providers(csv_path: Path = PROVIDERS_CSV):
     # Initialize data structures
     providers_per_country = defaultdict(set)  # Country -> set of providers
     cities_per_country = defaultdict(set)     # Country -> set of cities
     provider_features = defaultdict(dict)     # Provider -> features dict
     
     # Read the CSV file
-    with open('providers.csv', 'r') as f:
+    with csv_path.open("r", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
             provider = row['Provider']
@@ -144,4 +150,12 @@ def analyze_providers():
     print(f"Veeam Ready: {feature_counts['veeam_ready']} providers")
 
 if __name__ == "__main__":
-    analyze_providers() 
+    parser = argparse.ArgumentParser(description="Analyze European S3 providers.")
+    parser.add_argument(
+        "--csv",
+        type=Path,
+        default=PROVIDERS_CSV,
+        help="Path to providers.csv (defaults to data/providers/providers.csv)",
+    )
+    args = parser.parse_args()
+    analyze_providers(args.csv)

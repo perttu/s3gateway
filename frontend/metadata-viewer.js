@@ -2,6 +2,18 @@
 let currentMetadata = null;
 let snapshots = [];
 
+function escapeHtml(value) {
+    if (value === undefined || value === null) {
+        return '';
+    }
+    return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
 // Tab switching
 function showTab(tabName) {
     // Hide all tabs
@@ -55,22 +67,27 @@ function displayMetadataList(snapshots) {
         return;
     }
     
-    metadataList.innerHTML = snapshots.map(snapshot => `
-        <div class="metadata-item" onclick="viewMetadataDetail('${snapshot.id}')">
+    metadataList.innerHTML = '';
+    snapshots.forEach(snapshot => {
+        const item = document.createElement('div');
+        item.className = 'metadata-item';
+        item.addEventListener('click', () => viewMetadataDetail(snapshot.id));
+        item.innerHTML = `
             <div class="metadata-item-header">
-                <span class="metadata-endpoint">📍 ${snapshot.endpoint}</span>
-                <span class="metadata-timestamp">${formatDate(snapshot.timestamp)}</span>
+                <span class="metadata-endpoint">📍 ${escapeHtml(snapshot.endpoint)}</span>
+                <span class="metadata-timestamp">${escapeHtml(formatDate(snapshot.timestamp))}</span>
             </div>
             <div class="metadata-item-stats">
-                <span>🪣 ${snapshot.bucket_count} buckets</span>
-                <span>📄 ${snapshot.total_files.toLocaleString()} files</span>
-                <span>💾 ${formatBytes(snapshot.total_size)}</span>
+                <span>🪣 ${escapeHtml(snapshot.bucket_count)} buckets</span>
+                <span>📄 ${escapeHtml(snapshot.total_files.toLocaleString())} files</span>
+                <span>💾 ${escapeHtml(formatBytes(snapshot.total_size))}</span>
             </div>
             <div class="metadata-item-footer">
-                <small>📁 ${snapshot.filename}</small>
+                <small>📁 ${escapeHtml(snapshot.filename)}</small>
             </div>
-        </div>
-    `).join('');
+        `;
+        metadataList.appendChild(item);
+    });
 }
 
 // View metadata detail
@@ -91,7 +108,10 @@ async function viewMetadataDetail(id) {
 
 // Display metadata detail
 function displayMetadataDetail(metadata) {
-    document.querySelector('.card:has(#metadataList)').style.display = 'none';
+    const listCard = document.getElementById('metadataListCard');
+    if (listCard) {
+        listCard.style.display = 'none';
+    }
     document.getElementById('metadataDetailCard').style.display = 'block';
     
     document.getElementById('metadataTimestamp').textContent = formatDate(metadata.timestamp);
@@ -109,7 +129,10 @@ function displayMetadataDetail(metadata) {
 // Back to metadata list
 function backToMetadataList() {
     document.getElementById('metadataDetailCard').style.display = 'none';
-    document.querySelector('.card:has(#metadataList)').style.display = 'block';
+    const listCard = document.getElementById('metadataListCard');
+    if (listCard) {
+        listCard.style.display = 'block';
+    }
     currentMetadata = null;
 }
 

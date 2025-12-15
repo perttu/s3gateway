@@ -1,229 +1,277 @@
-# S3 Service Discovery Demo - Bulletproof Protocol
+# S3 Service Discovery & Proxy
 
-This demo showcases the secure data ingest feature for the Bulletproof Protocol, allowing users to discover S3 buckets and files using their credentials without storing them on the server.
+An open-source FastAPI + vanilla JS stack for discovering objects across S3-compatible providers, exporting repeatable snapshots, and outlining how a metadata-aware proxy can front any compliant backend. The focus is zero-trust discovery today plus hashing/replication patterns for a portable S3 control plane tomorrow.
 
-## Features
+---
 
-- 🔒 **Zero-Trust Security**: Credentials are only used for service discovery and never stored
-- 🪣 **Bucket Discovery**: List all accessible S3 buckets with provided credentials
-- 📁 **File Listing**: View all files in a bucket with size and metadata
-- 💾 **Backend Storage**: Snapshots are saved as JSON files on the server for persistence
-- 📊 **Metadata Viewer**: View stored snapshots and export discovered data for migration planning
-- 🔄 **Version Support**: Discover object versions for S3 buckets with versioning enabled
-- 🌐 **Multi-Provider Support**: Works with AWS S3, MinIO, Ceph, and other S3-compatible services
-- 🎨 **Modern UI**: Clean, responsive interface with real-time updates
-- 🐳 **Docker Support**: Easy deployment with Docker Compose
+## Highlights
 
-## Architecture
+- **Credential Isolation** – User-supplied keys never leave the browser; backend usage is stateless.
+- **Bucket & Object Insight** – List buckets, drill into files, retrieve version histories, and capture caged JSON snapshots.
+- **Snapshot Persistence** – Per-endpoint JSON dumps stored under `backend/snapshots/` with configurable caps.
+- **Metadata Viewer** – Review prior discoveries, export JSON, or clean up individual snapshots directly from the UI.
+- **Proxy Blueprint** – Docs explain namespace hashing + replication so any S3-compatible backend can sit behind the same endpoint.
+- **Docker Native** – Containerized frontend/backend plus dev overrides under `docker/`.
 
-- **Frontend**: Vanilla JavaScript with modern CSS served by Nginx
-- **Backend**: FastAPI (Python) for S3 service discovery
-- **Security**: Credentials are passed through to boto3 client without storage
-- **Containerization**: Both services run in Docker containers
+---
 
-## Prerequisites
+## Repository Layout
 
-- Docker and Docker Compose
-- S3-compatible storage credentials
+```
+backend/        FastAPI app, config/models/services modules, snapshots storage
+frontend/       Static UI (index.html, app.js, metadata-viewer.js, styles, nginx.conf)
+docker/         Dockerfiles + compose files (base + dev overrides)
+data/providers/ CSV datasets used by helper scripts
+scripts/        Analysis & tooling (analyze.py, convert_flat.py, sovereignty_checker.py, etc.)
+docs/           Contributor guide, architecture notes, ingest plan, protocol text
+examples/       Non-sensitive templates such as credentials.example
+archive/s3gateway/ Legacy automation kept for historical reference (new development lives under backend/ + scripts/)
+Makefile        Wrapper around docker compose commands
+LICENSE         GNU GPLv3 terms
+```
 
-## Quick Start with Docker
+For coding standards, testing requirements, and security tips see `docs/CONTRIBUTING.md`.
 
-### 1. Clone the repository
+---
+
+## Architecture Overview
+
+- **Frontend** — `frontend/index.html` served by Nginx (`frontend/nginx.conf`) renders `app.js` (discovery flow) and `metadata-viewer.js` (snapshot browser). The UI reads `window.APP_CONFIG.apiBaseUrl` when present, falling back to origin.
+- **Backend** — `backend/main.py` exposes FastAPI endpoints, delegating to `app/services.py` for S3/boto3 operations and snapshot persistence, keeping models typed via `app/models.py`.
+- **Snapshot Storage** — JSON artifacts live under `backend/snapshots/` (git-ignored) with limits controlled by `MAX_SNAPSHOT_BUCKETS`, `MAX_SNAPSHOT_FILES`, and `MAX_FILES_PER_BUCKET` from `app/config.py`.
+- **Metadata Layer** — `backend/app/hash_utils.py` contains deterministic bucket hashing logic, while `backend/app/db.py` + `backend/app/proxy_meta.py` expose `/proxy/*` APIs to persist bucket/object metadata in a lightweight SQLite database and seed provider capability data from `data/providers/`.
+- **Docs & Research** — Deep dive diagrams sit in `docs/ARCHITECTURE.md`; `docs/PROTOCOL.md` and `docs/PLAN.md` document the proxy roadmap. Historical PDFs live under `archive/whitepapers/`.
+
+---
+
+## Getting Started
+
+### Prerequisites
+
+- Docker + Docker Compose
+- Python 3.11+ (for local backend work or tests)
+- Node/npm optional (frontend is static; `python -m http.server` works)
+- S3-compatible credentials
+
+### Quick Start (Docker)
 
 ```bash
+# Clone the repo
 git clone <repository-url>
-cd s3discovery
+cd s3gateway
+
+# Build and launch both services
+docker-compose -f docker/docker-compose.yml up -d
+
+# Tail logs
+docker-compose -f docker/docker-compose.yml logs -f
+
+# Stop everything
+docker-compose -f docker/docker-compose.yml down
 ```
 
-### 2. Start all services
+Dev mode with bind mounts / hot reload:
 
 ```bash
-docker-compose up
-```
-
-Or use the Makefile:
-```bash
-make up
-```
-
-### 3. Access the application
-
-- Frontend: http://localhost:8080
-- API Docs: http://localhost:8000/docs
-
-## Development with Docker
-
-### Using Docker Compose
-
-```bash
-# Build images
-docker-compose build
-
-# Start services in background
-docker-compose up -d
-
-# View logs
-docker-compose logs -f
-
-# Stop services
-docker-compose down
-```
-
-### Using Make commands
-
-```bash
-# Show all available commands
-make help
-
-# Start in development mode with hot reload
+docker-compose \
+  -f docker/docker-compose.yml \
+  -f docker/dev/docker-compose.dev.yml up
+# or simply
 make dev
-
-# View logs
-make logs
-
-# Open shell in backend container
-make shell-backend
-
-# Clean up containers and volumes
-make clean
 ```
 
-## Manual Installation (without Docker)
+*(All Makefile targets wrap the compose files under `docker/` — run `make help` for the menu.)*
 
-### Backend Setup
+### Manual Backend Run
 
-1. Navigate to the backend directory:
 ```bash
 cd backend
-```
-
-2. Create a virtual environment:
-```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
-
-3. Install dependencies:
-```bash
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-```
-
-4. Run the backend:
-```bash
-python main.py
-```
-
-### Frontend Setup
-
-The frontend is static HTML/CSS/JS and can be served by any web server.
-
-Option 1 - Using Python's built-in server:
-```bash
-cd frontend
-python -m http.server 8080
-```
-
-Option 2 - Using Node.js (if installed):
-```bash
-cd frontend
-npx http-server -p 8080
-```
-
-Option 3 - Open directly in browser:
-Simply open `frontend/index.html` in your web browser.
-
-## Usage
-
-### Discovery Tab
-
-1. **Enter S3 Credentials**:
-   - Access Key: Your S3 access key
-   - Secret Key: Your S3 secret key
-   - Region: AWS region or "default" for custom S3 providers
-   - Endpoint: S3 API endpoint (default: `https://s3c.tns.cx`)
-
-2. **Discover Buckets**:
-   - Click "Discover Buckets" to list all accessible buckets
-   - The system will validate credentials and display available buckets
-   - A snapshot is automatically saved to the backend server
-   - The complete JSON data is displayed on screen
-
-3. **View Files**:
-   - Click on any bucket to view its contents
-   - See file names, sizes, last modified dates, and ETags
-   - Versioning status is shown if available
-
-### Metadata Viewer Tab
-
-1. **View Stored Snapshots**:
-   - Switch to the "Metadata Viewer" tab
-   - See all snapshots saved on the server
-   - Each snapshot shows endpoint, timestamp, and statistics
-
-2. **Explore Snapshot Details**:
-   - Click on any snapshot to view full details
-   - See complete JSON structure with all buckets and files
-
-3. **Export for Migration**:
-   - Click "Export JSON" to download snapshot data
-   - Use exported data for migration planning or as input for replication jobs
-   - Snapshots are stored in the `snapshots/` directory on the server
-
-4. **Manage Snapshots**:
-   - Delete individual snapshots as needed
-   - All snapshots are persisted on the backend server
-
-## Security Notes
-
-- ✅ Credentials are **never stored** on the server
-- ✅ All API calls are stateless
-- ✅ Credentials are only used to create temporary boto3 clients
-- ✅ HTTPS should be used in production
-- ✅ CORS is configured for development (restrict in production)
-
-## Supported S3 Providers
-
-- AWS S3
-- MinIO
-- Ceph RGW
-- Wasabi
-- DigitalOcean Spaces
-- Any S3-compatible storage
-
-## API Endpoints
-
-- `POST /discover/buckets` - List all buckets
-- `POST /discover/bucket/{bucket_name}` - Get bucket details and file list
-- `POST /discover/bucket/{bucket_name}/versions` - Get object versions (if versioning enabled)
-- `POST /snapshot/save` - Save a discovery snapshot
-- `GET /snapshot/list` - List all saved snapshots
-- `GET /snapshot/{snapshot_id}` - Get a specific snapshot
-- `DELETE /snapshot/{snapshot_id}` - Delete a snapshot
-- `GET /health` - Health check
-
-## Error Handling
-
-The demo includes comprehensive error handling for:
-- Invalid credentials
-- Network errors
-- Access denied scenarios
-- Non-existent buckets
-- S3 API errors
-
-## Development
-
-### Backend Development
-
-The FastAPI backend supports hot-reload:
-```bash
-cd backend
 uvicorn main:app --reload
 ```
 
-### Frontend Development
+### Manual Frontend Run
 
-Modify files in the `frontend/` directory and refresh your browser.
+```bash
+cd frontend
+python -m http.server 8080
+# or
+npx http-server -p 8080
+# or open index.html directly
+```
+
+Visit http://localhost:8080 (UI) and http://localhost:8000/docs (backend Swagger).
+
+---
+
+## Proxy Metadata & SigV4 Proxy (preview)
+
+The backend now ships a partial metadata service under the `/proxy` prefix:
+
+- `POST /proxy/buckets` — hash & persist backend bucket names for a tenant (`customer_id`, `logical_name`, `backend_ids[]`).
+- `GET /proxy/buckets/{customer_id}/{logical_name}` — retrieve hashed mappings (used to route SigV4 requests).
+- `POST /proxy/objects` — register object metadata (etag, residency, replica count, encrypted key reference). Optionally include `targets` to enqueue replication jobs.
+- `GET /proxy/objects/{customer_id}/{logical_name}` — list stored metadata across all hashed backends.
+- `POST /proxy/credentials` / `GET /proxy/credentials/{access_key}` — register SigV4 access keys for tenants.
+- `POST /proxy/jobs` / `GET /proxy/jobs` — manage replication queue entries manually.
+
+Data is stored in `metadata.db` (override via `PROXY_METADATA_DB_PATH`). Provider capabilities from `data/providers/providers_flat.csv` are loaded automatically on startup, giving the proxy layer a residency-aware lookup table.
+
+All `/proxy/*` endpoints require the admin header `X-Admin-Key: <ADMIN_API_KEY>`.
+
+To process replication jobs, run `python scripts/replication_worker.py` (or `REPLICATION_WORKER_INTERVAL=5 python scripts/replication_worker.py`) and replace the stub handler with real boto3 / storage calls.
+
+### SigV4 Front Door (`/s3/...`)
+
+A minimal SigV4 router is exposed at `/s3/{logical_bucket}/{object_path}` (supports `GET`, `PUT`, `DELETE`, `HEAD`). Requests must be signed using AWS SigV4 and use credentials that were registered via `/proxy/credentials`. The router will:
+
+1. Validate the SigV4 signature.
+2. Resolve the hashed backend bucket via `/proxy/buckets` metadata.
+3. Forward the request to the configured S3-compatible backend using boto3.
+
+Environment variables (router + replication worker share these):
+
+```
+S3_BACKEND_DEFAULT_ID=primary
+S3_BACKEND_ENDPOINT=https://minio.local
+# or S3_BACKEND_ENDPOINTS=primary=https://minio.local,secondary=https://ceph.local
+S3_BACKEND_REGION=us-east-1
+S3_BACKEND_ACCESS_KEY=<backend access key>
+S3_BACKEND_SECRET_KEY=<backend secret>
+TENANT_SECRET_PASSPHRASE=<symmetric key for encrypting tenant secrets>
+ADMIN_API_KEY=<value required in X-Admin-Key header for /proxy/* endpoints>
+```
+
+(Older `PROXY_ROUTER_*` env vars still work for backward compatibility.)
+
+All metadata/admin APIs require `X-Admin-Key: <ADMIN_API_KEY>` and secrets stored via `/proxy/credentials` are encrypted with `TENANT_SECRET_PASSPHRASE`.
+
+Example flow (using boto3 to sign):
+
+```python
+from botocore.auth import SigV4Auth
+from botocore.awsrequest import AWSRequest
+from botocore.credentials import Credentials
+import requests
+
+url = "http://localhost:8000/s3/docs/report.txt"
+body = b"hello world"
+req = AWSRequest(method="PUT", url=url, data=body, headers={"host": "localhost:8000", "x-amz-content-sha256": hashlib.sha256(body).hexdigest(), "x-amz-date": "..."} )
+SigV4Auth(Credentials("<tenant-access>", "<tenant-secret>"), "s3", "us-east-1").add_auth(req)
+requests.put(url, data=body, headers=req.headers)
+
+### Demo Stack
+
+To spin up a proof-of-concept including the proxy, metadata DB, and replication worker:
+
+```bash
+cd docker/demo
+docker-compose -f docker-compose.demo.yml up --build
+```
+
+And to run the smoke test (registers a tenant, uploads a file via SigV4, waits for replication):
+
+```bash
+python scripts/demo_smoke_test.py \
+  --api-base http://localhost:8000 \
+  --proxy-base http://localhost:8000 \
+  --admin-key demo-admin
+```
+
+Environment overrides (S3 endpoints, secrets) can be supplied via env vars as noted above.
+
+### Roadmap & Next Steps
+
+The remaining phases for hardening this proxy are tracked in `docs/IMPLEMENTATION_PLAN.md`. Highlights:
+
+1. **Phase 7 (in progress)** – Secure admin workflows, RBAC, and encrypted credential storage (basic encryption + admin key already implemented).
+2. **Phase 8 (this doc)** – Demo-ready deployment & observability (docker-compose demo + smoke test now available).
+3. **Phase 9** – Automated end-to-end testing (standing up real backends, UI regression tests).
+
+### Before Using in Production
+
+This repository remains a proof of concept. Prior to any production usage:
+
+- Replace the demo sqlite DB with a managed database (PostgreSQL, etc.) and add migrations.
+- Harden secret storage (integrate with a KMS or Vault instead of the simple XOR-based helper).
+- Add authentication/authorization for the SigV4 proxy itself (rate limiting, tenant isolation).
+- Implement real replication error handling (resume, retries, cross-account credentials).
+- Run the smoke test plus your own S3 stress tests against production-like backends.
+
+### Performance & Scalability Considerations
+
+- **SQLite bottleneck** – metadata reads/writes are single-process; concurrent proxy + worker requests will contend.
+- **Single worker** – `scripts/replication_worker.py` runs in one process; scaling requires splitting DB + adding job sharding.
+- **Proxy throughput** – FastAPI + boto3 proxying is synchronous; for high throughput you’ll need async S3 clients, caching, and multiple instances.
+- **Logging/monitoring** – Only basic logging exists; add structured logs + metrics before load testing.
+```
+
+---
+
+## Development Workflow
+
+- **Hot Reload** – `make dev` attaches `docker/dev/docker-compose.dev.yml`, mounting `backend/` and `frontend/` for live changes.
+- **Logs** – `make logs`, `make logs-backend`, `make logs-frontend`.
+- **Shell Access** – `make shell-backend` / `make shell-frontend`.
+- **Cleanup** – `make clean` tears down containers + volumes.
+
+Follow PEP 8 in backend modules, camelCase JS, and keep helpers next to the endpoints they support. The shared logger inside `app/services.py` should be reused for backend logging.
+
+---
+
+## Testing
+
+- Python unit tests live under `backend/tests/`. Run them with:
+
+  ```bash
+  cd backend
+  pytest -q
+  ```
+
+- New backend endpoints/helpers should ship with pytest coverage that mocks boto3 clients (invalid creds, pagination, snapshot persistence).
+- Manual UI verification checklist:
+  - Launch stack (`make up` or dev mode).
+  - Hit `http://localhost:8000/health`.
+  - Submit valid credentials in the Discover tab.
+  - Verify snapshots appear under Metadata Viewer and files are written to `backend/snapshots/`.
+
+---
+
+## Documentation & Research
+
+- `docs/CONTRIBUTING.md` — Repo guidelines, coding style, testing expectations.
+- `docs/ARCHITECTURE.md` — Mermaid diagrams for request flows, module responsibilities, and container topology.
+- `docs/PLAN.md` — S3 proxy roadmap (hashing, replication, residency).
+- `docs/INGEST.md` — Secure ingest process notes (client-side encryption, Ceph flows).
+- `docs/PROTOCOL.md` and `archive/whitepapers/` — Protocol narrative plus historical references for posterity.
+- `examples/credentials.example` — Safe template for sharing non-sensitive configuration.
+
+---
+
+## Security Notes
+
+- Never commit real credentials—`.env` and snapshot directories are ignored; copy `env.example` locally when needed.
+- `ALLOWED_ORIGINS`, `MAX_SNAPSHOT_*` settings, and snapshot directories are controlled through env vars defined in `app/config.py`.
+- `/proxy/*` endpoints require `ADMIN_API_KEY` via the `X-Admin-Key` header, and tenant secrets stored via `/proxy/credentials` are encrypted using `TENANT_SECRET_PASSPHRASE`.
+- Sanitized logs only: bucket names or endpoints should not leak to console except via the shared logger with caution.
+- HTTPS termination is expected in production deployments (Docker setup assumes local dev).
+
+---
+
+## Contributing
+
+Contributions are welcome! Open an issue describing the change, follow the tests/docs guidelines above, and share screenshots or CLI output where relevant. Please split backend and frontend refactors unless they must land together.
+
+---
 
 ## License
 
-Part of the Bulletproof Protocol project - ensuring data sovereignty and zero-trust security for federated storage networks. 
+Distributed under the GNU General Public License v3.0 (`LICENSE`). By contributing, you agree that your contributions will be licensed under the same terms.
+
+---
+
+## Acknowledgements
+
+- Thanks to the OSS community for FastAPI, boto3, and rich client/browser tooling that made this stack possible.

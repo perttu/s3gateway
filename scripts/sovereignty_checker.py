@@ -1,8 +1,14 @@
+import argparse
 import csv
 from collections import defaultdict
-from typing import Dict, List, Set, Tuple
+from pathlib import Path
+from typing import Dict, List, Tuple
 from dataclasses import dataclass
 from enum import Enum
+
+
+DATA_DIR = Path(__file__).resolve().parents[1] / "data" / "providers"
+DEFAULT_PROVIDERS_CSV = DATA_DIR / "providers.csv"
 
 class ProviderType(Enum):
     CLOUD = "cloud"
@@ -22,12 +28,12 @@ class Location:
     is_veeam_ready: bool
 
 class SovereigntyChecker:
-    def __init__(self, csv_file: str):
+    def __init__(self, csv_file: Path = DEFAULT_PROVIDERS_CSV):
         self.locations: Dict[str, List[Location]] = defaultdict(list)
         self.load_data(csv_file)
 
-    def load_data(self, csv_file: str):
-        with open(csv_file, 'r') as f:
+    def load_data(self, csv_file: Path):
+        with csv_file.open('r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
             for row in reader:
                 country = row['Country']
@@ -126,7 +132,18 @@ def format_location(location: Location) -> str:
     return f"{location.city} ({location.provider}) {' '.join(features)}"
 
 def main():
-    checker = SovereigntyChecker('providers.csv')
+    parser = argparse.ArgumentParser(
+        description="Evaluate replica placements for sovereign storage."
+    )
+    parser.add_argument(
+        "--csv",
+        type=Path,
+        default=DEFAULT_PROVIDERS_CSV,
+        help="Path to providers.csv (defaults to data/providers/providers.csv)",
+    )
+    args = parser.parse_args()
+
+    checker = SovereigntyChecker(args.csv)
     
     print("\n=== Data Sovereignty and Replica Placement Checker ===\n")
     
