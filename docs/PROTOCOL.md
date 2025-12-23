@@ -74,7 +74,7 @@ sequenceDiagram
 - `docker/` – Container definitions for the UI/API plus dev overrides.
 - `data/providers/` + `scripts/` – EU provider catalogs and helper utilities (analyze, convert, sovereignty checker) that feed the policy engine.
 - `docs/ARCHITECTURE.md`, `docs/PLAN.md`, `docs/INGEST.md` – Architecture diagrams, roadmap, and ingest playbook referenced by this protocol.
-- `archive/s3gateway/` – Legacy automation that inspired the proxy layer (hashing, placement, replication). New work now targets `backend/` + `scripts/`.
+  (Legacy prototypes inspired the hashing, placement, and replication designs; new work targets `backend/` + `scripts/`.)
 
 ---
 

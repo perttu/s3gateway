@@ -94,4 +94,4 @@ Phases 1–4 (hashing extraction, metadata API, replication queue/worker foundat
 
 ---
 
-Future proxy work should extend the current `backend/`, `frontend/`, and `scripts/` modules rather than touching `archive/s3gateway/`. This plan highlights the remaining engineering work to move from concept to production-ready proxy services with comprehensive testing.*** End Patch
+Future gateway work should extend the current `backend/`, `frontend/`, and `scripts/` modules. This plan highlights the remaining engineering work to move from concept to production-ready gateway services with comprehensive testing.

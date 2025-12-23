@@ -112,13 +112,50 @@ The metadata viewer repeats the pattern in read-only form by calling `/snapshot/
 - `frontend/` – Static assets (HTML/CSS/JS) and the `nginx.conf` used by the container.
 - `docker/` – Container definitions (`docker/backend/Dockerfile`, `docker/frontend/Dockerfile`, and compose files under `docker/` + `docker/dev/`).
 - `data/providers/` & `scripts/` – Sovereignty datasets plus helper utilities (`analyze.py`, `convert_flat.py`, `sovereignty_checker.py`, etc.).
-- `docs/` – Contributor guide, this architecture narrative, ingest plan, roadmap, protocol text. Historical PDFs have been relocated to `archive/whitepapers/`.
+- `docs/` – Contributor guide, this architecture narrative, ingest plan, roadmap, protocol text.
 - `examples/credentials.example` – Sanitized template for sharing connection details without exposing real keys.
-- `archive/s3gateway/` – Legacy automation implementing the namespace hashing + replication agents described below (kept for reference; new development happens under `backend/` + `scripts/`).
+  (Legacy prototypes implemented the namespace hashing + replication agents; new development happens under `backend/` + `scripts/`.)
 
 ## Namespace Hashing & Metadata Persistence
 
-To integrate with the full S3 proxy (see `archive/s3gateway/` for historical context), customer-facing bucket names are hashed and stored in metadata tables, avoiding collisions across heterogeneous providers.
+### Deployment Topology (Mermaid)
+
+```mermaid
+flowchart LR
+    subgraph Clients
+        C[Apps / CLI / SDKs]
+        UI[Web UI]
+    end
+
+    subgraph Gateway["S3Gateway (FastAPI)"]
+        GW[SigV4 Front Door]
+        API[Discovery & Admin APIs]
+    end
+
+    subgraph ControlPlane["Control Plane"]
+        DB[(Metadata DB\nSQLite → PostgreSQL)]
+        Q[(Queue\noptional: Redis/Rabbit/Kafka)]
+        W[Replication Workers]
+    end
+
+    subgraph Backends["S3-Compatible Backends"]
+        S3A[(AWS S3)]
+        S3B[(MinIO / Ceph / Wasabi)]
+    end
+
+    C -->|SigV4| GW
+    UI -->|HTTPS| API
+    GW -->|resolve + route| DB
+    GW -->|forward| S3A
+    GW -->|forward| S3B
+    API --> DB
+    DB --> W
+    W <-->|jobs| Q
+    W -->|replicate/repair| S3A
+    W -->|replicate/repair| S3B
+```
+
+To integrate with the full S3 gateway, customer-facing bucket names are hashed and stored in metadata tables, avoiding collisions across heterogeneous providers.
 
 ```mermaid
 flowchart LR

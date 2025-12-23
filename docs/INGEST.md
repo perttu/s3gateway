@@ -36,7 +36,7 @@ Key differences from vanilla S3:
 
 - Clients interact with the actual storage backend themselves; the gateway never proxies payloads.
 - The ingest UI from this repo (`frontend/`) only handles discovery + metadata submission, not uploads.
-- Namespace hashing ensures the metadata record aligns with the deterministic bucket naming described in `backend/app/hash_utils.py` (originating from the archived `s3gateway/` prototype) and the replication queue.
+- Namespace hashing ensures the metadata record aligns with the deterministic bucket naming described in `backend/app/hash_utils.py` and the replication queue.
 
 ---
 
@@ -112,5 +112,5 @@ Key differences from vanilla S3:
 
 - `frontend/` hosts the discover + metadata viewer flows referenced above.
 - `backend/` (`app/services.py`) handles snapshot persistence and provides the scaffolding for metadata submissions.
-- `docs/ARCHITECTURE.md` explains how ingest metadata feeds the namespace hasher and replication queue housed in the discovery/proxy stack (historical context preserved under `archive/s3gateway/`).
+- `docs/ARCHITECTURE.md` explains how ingest metadata feeds the namespace hasher and replication queue housed in the discovery/gateway stack.
 - `data/providers/` and `scripts/` document which EU providers support features like object lock and ISO 27001 — useful when selecting ingest targets.

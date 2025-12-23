@@ -7,6 +7,7 @@ credentials/
 credentials
 google-credentials.json
 calendar/
+archive/
 
 # OS clutter
 .DS_Store

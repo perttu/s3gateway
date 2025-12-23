@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-The FastAPI backend sits in `backend/`, where `main.py` holds all endpoints and `snapshots/` stores git-ignored discovery JSON. Static assets live in `frontend/` and are served via the Nginx config at `frontend/nginx.conf`, while container tooling lives under `docker/` (per-service Dockerfiles, base Compose file, and dev overrides used by the Makefile). Long-form docs and plans now live under `docs/`, data sources under `data/providers/`, helper utilities under `scripts/`, and sanitized templates under `examples/`. Historical code under `archive/s3gateway/` is read-only; do not modify it when working on the current proxy.
+The FastAPI backend sits in `backend/`, where `main.py` holds all endpoints and `snapshots/` stores git-ignored discovery JSON. Static assets live in `frontend/` and are served via the Nginx config at `frontend/nginx.conf`, while container tooling lives under `docker/` (per-service Dockerfiles, base Compose file, and dev overrides used by the Makefile). Long-form docs and plans now live under `docs/`, data sources under `data/providers/`, helper utilities under `scripts/`, and sanitized templates under `examples/`.
 
 ## Build, Test, and Development Commands
 - `make up` — build (if needed) and launch the stack with docker-compose.

@@ -1,6 +1,10 @@
-# S3 Service Discovery & Proxy
+# S3Gateway — Policy‑Aware S3 Gateway with Data Sovereignty
 
-An open-source FastAPI + vanilla JS stack for discovering objects across S3-compatible providers, exporting repeatable snapshots, and outlining how a metadata-aware proxy can front any compliant backend. The focus is zero-trust discovery today plus hashing/replication patterns for a portable S3 control plane tomorrow.
+Add data sovereignty, deterministic bucket names, and policy‑driven replication to any S3‑compatible backend — without vendor lock‑in. Open source and self‑hosted.
+
+Quick links: [Getting Started](#getting-started) · [Architecture Overview](docs/ARCHITECTURE_OVERVIEW.md) · [Production Readiness](docs/PRODUCTION_READINESS.md)
+
+An open-source FastAPI + vanilla JS stack for discovering objects across S3-compatible providers, exporting repeatable snapshots, and outlining how a metadata‑aware gateway can front any compliant backend. The focus is zero-trust discovery today plus hashing/replication patterns for a portable S3 control plane tomorrow.
 
 ---
 
@@ -10,7 +14,7 @@ An open-source FastAPI + vanilla JS stack for discovering objects across S3-comp
 - **Bucket & Object Insight** – List buckets, drill into files, retrieve version histories, and capture caged JSON snapshots.
 - **Snapshot Persistence** – Per-endpoint JSON dumps stored under `backend/snapshots/` with configurable caps.
 - **Metadata Viewer** – Review prior discoveries, export JSON, or clean up individual snapshots directly from the UI.
-- **Proxy Blueprint** – Docs explain namespace hashing + replication so any S3-compatible backend can sit behind the same endpoint.
+- **Gateway Blueprint** – Docs explain namespace hashing + replication so any S3-compatible backend can sit behind the same endpoint.
 - **Docker Native** – Containerized frontend/backend plus dev overrides under `docker/`.
 
 ---
@@ -25,12 +29,20 @@ data/providers/ CSV datasets used by helper scripts
 scripts/        Analysis & tooling (analyze.py, convert_flat.py, sovereignty_checker.py, etc.)
 docs/           Contributor guide, architecture notes, ingest plan, protocol text
 examples/       Non-sensitive templates such as credentials.example
-archive/s3gateway/ Legacy automation kept for historical reference (new development lives under backend/ + scripts/)
 Makefile        Wrapper around docker compose commands
 LICENSE         GNU GPLv3 terms
 ```
 
 For coding standards, testing requirements, and security tips see `docs/CONTRIBUTING.md`.
+
+---
+
+## Key Docs
+
+- Architecture (at a glance): `docs/ARCHITECTURE_OVERVIEW.md`
+- Production readiness & gaps: `docs/PRODUCTION_READINESS.md`
+- Deep dive architecture: `docs/ARCHITECTURE.md`
+- Protocol semantics & roadmap: `docs/PROTOCOL.md`, `docs/PLAN.md`, `docs/IMPLEMENTATION_PLAN.md`
 
 ---
 
@@ -40,7 +52,65 @@ For coding standards, testing requirements, and security tips see `docs/CONTRIBU
 - **Backend** — `backend/main.py` exposes FastAPI endpoints, delegating to `app/services.py` for S3/boto3 operations and snapshot persistence, keeping models typed via `app/models.py`.
 - **Snapshot Storage** — JSON artifacts live under `backend/snapshots/` (git-ignored) with limits controlled by `MAX_SNAPSHOT_BUCKETS`, `MAX_SNAPSHOT_FILES`, and `MAX_FILES_PER_BUCKET` from `app/config.py`.
 - **Metadata Layer** — `backend/app/hash_utils.py` contains deterministic bucket hashing logic, while `backend/app/db.py` + `backend/app/proxy_meta.py` expose `/proxy/*` APIs to persist bucket/object metadata in a lightweight SQLite database and seed provider capability data from `data/providers/`.
-- **Docs & Research** — Deep dive diagrams sit in `docs/ARCHITECTURE.md`; `docs/PROTOCOL.md` and `docs/PLAN.md` document the proxy roadmap. Historical PDFs live under `archive/whitepapers/`.
+- **Docs & Research** — Deep dive diagrams sit in `docs/ARCHITECTURE.md`; `docs/PROTOCOL.md` and `docs/PLAN.md` document the gateway roadmap. For a concise overview, see `docs/ARCHITECTURE_OVERVIEW.md`.
+
+### Topology (High Level)
+
+```mermaid
+flowchart LR
+    subgraph Clients
+      C[Apps / CLI / SDKs]
+      UI[Web UI]
+    end
+
+    subgraph Gateway["S3Gateway (FastAPI)"]
+      GW[SigV4 Front Door]
+      API[Discovery & Admin APIs]
+    end
+
+    subgraph ControlPlane["Control Plane"]
+      DB[(Metadata DB\nSQLite → PostgreSQL)]
+      W[Replication Workers]
+    end
+
+    subgraph Backends["S3-Compatible Backends"]
+      S3A[(AWS S3)]
+      S3B[(MinIO / Ceph / Wasabi)]
+    end
+
+    C -->|SigV4| GW
+    UI -->|HTTPS| API
+    GW -->|resolve + route| DB
+    GW -->|forward| S3A
+    GW -->|forward| S3B
+    API --> DB
+    DB --> W
+    W -->|replicate/repair| S3A
+    W -->|replicate/repair| S3B
+```
+
+### Compose Topology (Dev)
+
+```mermaid
+flowchart TB
+    subgraph Host
+      U[Developer]
+      P8080[localhost:8080]
+      P8000[localhost:8000]
+    end
+
+    subgraph Docker[bridge network: s3gateway]
+      FE[[s3gateway-frontend\nNginx]]
+      BE[[s3gateway-backend\nFastAPI]]
+    end
+
+    U --> P8080
+    U --> P8000
+    P8080 -->|80| FE
+    P8000 -->|8000| BE
+    FE -->|HTTP (depends_on healthy)| BE
+```
+- **Docs & Research** — Deep dive diagrams sit in `docs/ARCHITECTURE.md`; `docs/PROTOCOL.md` and `docs/PLAN.md` document the gateway roadmap. For a concise overview, see `docs/ARCHITECTURE_OVERVIEW.md`.
 
 ---
 
@@ -106,9 +176,9 @@ Visit http://localhost:8080 (UI) and http://localhost:8000/docs (backend Swagger
 
 ---
 
-## Proxy Metadata & SigV4 Proxy (preview)
+## Gateway Metadata & SigV4 Front Door (preview)
 
-The backend now ships a partial metadata service under the `/proxy` prefix:
+The backend now ships a partial metadata control plane under the `/proxy` prefix:
 
 - `POST /proxy/buckets` — hash & persist backend bucket names for a tenant (`customer_id`, `logical_name`, `backend_ids[]`).
 - `GET /proxy/buckets/{customer_id}/{logical_name}` — retrieve hashed mappings (used to route SigV4 requests).
@@ -117,7 +187,7 @@ The backend now ships a partial metadata service under the `/proxy` prefix:
 - `POST /proxy/credentials` / `GET /proxy/credentials/{access_key}` — register SigV4 access keys for tenants.
 - `POST /proxy/jobs` / `GET /proxy/jobs` — manage replication queue entries manually.
 
-Data is stored in `metadata.db` (override via `PROXY_METADATA_DB_PATH`). Provider capabilities from `data/providers/providers_flat.csv` are loaded automatically on startup, giving the proxy layer a residency-aware lookup table.
+Data is stored in `metadata.db` (override via `PROXY_METADATA_DB_PATH`). Provider capabilities from `data/providers/providers_flat.csv` are loaded automatically on startup, giving the gateway a residency-aware lookup table.
 
 All `/proxy/*` endpoints require the admin header `X-Admin-Key: <ADMIN_API_KEY>`.
 
@@ -164,7 +234,7 @@ requests.put(url, data=body, headers=req.headers)
 
 ### Demo Stack
 
-To spin up a proof-of-concept including the proxy, metadata DB, and replication worker:
+To spin up a proof-of-concept including the gateway, metadata DB, and replication worker:
 
 ```bash
 cd docker/demo
@@ -184,7 +254,7 @@ Environment overrides (S3 endpoints, secrets) can be supplied via env vars as no
 
 ### Roadmap & Next Steps
 
-The remaining phases for hardening this proxy are tracked in `docs/IMPLEMENTATION_PLAN.md`. Highlights:
+The remaining phases for hardening this gateway are tracked in `docs/IMPLEMENTATION_PLAN.md`. Highlights:
 
 1. **Phase 7 (in progress)** – Secure admin workflows, RBAC, and encrypted credential storage (basic encryption + admin key already implemented).
 2. **Phase 8 (this doc)** – Demo-ready deployment & observability (docker-compose demo + smoke test now available).
@@ -196,15 +266,15 @@ This repository remains a proof of concept. Prior to any production usage:
 
 - Replace the demo sqlite DB with a managed database (PostgreSQL, etc.) and add migrations.
 - Harden secret storage (integrate with a KMS or Vault instead of the simple XOR-based helper).
-- Add authentication/authorization for the SigV4 proxy itself (rate limiting, tenant isolation).
+- Add authentication/authorization for the SigV4 gateway itself (rate limiting, tenant isolation).
 - Implement real replication error handling (resume, retries, cross-account credentials).
 - Run the smoke test plus your own S3 stress tests against production-like backends.
 
 ### Performance & Scalability Considerations
 
-- **SQLite bottleneck** – metadata reads/writes are single-process; concurrent proxy + worker requests will contend.
+- **SQLite bottleneck** – metadata reads/writes are single-process; concurrent gateway + worker requests will contend.
 - **Single worker** – `scripts/replication_worker.py` runs in one process; scaling requires splitting DB + adding job sharding.
-- **Proxy throughput** – FastAPI + boto3 proxying is synchronous; for high throughput you’ll need async S3 clients, caching, and multiple instances.
+- **Gateway throughput** – FastAPI + boto3 proxying is synchronous; for high throughput you’ll need async S3 clients, caching, and multiple instances.
 - **Logging/monitoring** – Only basic logging exists; add structured logs + metrics before load testing.
 ```
 
@@ -243,9 +313,9 @@ Follow PEP 8 in backend modules, camelCase JS, and keep helpers next to the endp
 
 - `docs/CONTRIBUTING.md` — Repo guidelines, coding style, testing expectations.
 - `docs/ARCHITECTURE.md` — Mermaid diagrams for request flows, module responsibilities, and container topology.
-- `docs/PLAN.md` — S3 proxy roadmap (hashing, replication, residency).
+- `docs/PLAN.md` — S3 gateway roadmap (hashing, replication, residency).
 - `docs/INGEST.md` — Secure ingest process notes (client-side encryption, Ceph flows).
-- `docs/PROTOCOL.md` and `archive/whitepapers/` — Protocol narrative plus historical references for posterity.
+- `docs/PROTOCOL.md` — Protocol narrative and references.
 - `examples/credentials.example` — Safe template for sharing non-sensitive configuration.
 
 ---
