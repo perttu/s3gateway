@@ -2,7 +2,7 @@
 
 Add data sovereignty, deterministic bucket names, and policy‑driven replication to any S3‑compatible backend — without vendor lock‑in. Open source and self‑hosted.
 
-Quick links: [Getting Started](#getting-started) · [Architecture Overview](docs/ARCHITECTURE_OVERVIEW.md) · [Production Readiness](docs/PRODUCTION_READINESS.md)
+Quick links: [Website](https://s3gateway.com) · [Getting Started](#getting-started) · [Architecture Overview](docs/ARCHITECTURE_OVERVIEW.md) · [Production Readiness](docs/PRODUCTION_READINESS.md)
 
 An open-source FastAPI + vanilla JS stack for discovering objects across S3-compatible providers, exporting repeatable snapshots, and outlining how a metadata‑aware gateway can front any compliant backend. The focus is zero-trust discovery today plus hashing/replication patterns for a portable S3 control plane tomorrow.
 
