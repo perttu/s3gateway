@@ -1,4 +1,4 @@
-# S3Gateway — Policy‑Aware S3 Gateway with Data Sovereignty
+# https://s3gateway.com — Policy‑Aware S3 Gateway with Data Sovereignty 
 
 Add data sovereignty, deterministic bucket names, and policy‑driven replication to any S3‑compatible backend — without vendor lock‑in. Open source and self‑hosted.
 

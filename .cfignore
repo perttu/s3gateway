@@ -1,0 +1,2 @@
+# Ignore Bun lockfiles so Cloudflare Pages uses npm
+**/bun.lockb
